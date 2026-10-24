@@ -9,10 +9,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-INTERFACE = os.environ.get("AEGIS_DDNS_INTERFACE", "ens33")
-DNS_SERVER = os.environ.get("AEGIS_DDNS_SERVER", "192.168.49.53")
-DNS_SERVICE_IP = ipaddress.ip_address(os.environ.get("AEGIS_DNS_SERVICE_IP", "192.168.49.53"))
-NETWORK = ipaddress.ip_network(os.environ.get("AEGIS_DDNS_NETWORK", "192.168.49.0/24"))
+from production_network_identity import NetworkDiscoveryError, current_identity
+
+# The FQDN is a stable *identity*, never a static network locator.
+# Explicit interface/network overrides remain supported for legacy approved
+# deployments, but the default is DHCP route discovery in the existing module.
+INTERFACE = os.environ.get("AEGIS_DDNS_INTERFACE", "").strip() or None
+DNS_SERVER = os.environ.get("AEGIS_DDNS_SERVER", "127.0.0.1")
+APPROVED_NETWORK = os.environ.get("AEGIS_DDNS_NETWORK", "").strip() or None
 FQDN = os.environ.get("AEGIS_DDNS_FQDN", "aegis-prod.aegis.internal.")
 ZONE = os.environ.get("AEGIS_DDNS_ZONE", "aegis.internal.")
 KEY_FILE = Path(os.environ.get("AEGIS_DDNS_KEY", "/etc/aegisscan/ddns.key"))
@@ -50,51 +54,32 @@ def run(
         raise ReconcileError(f"command failed: {' '.join(argv)}: {detail}") from exc
 
 
-def discover_dynamic_ipv4() -> ipaddress.IPv4Address:
-    result = run(
-        [
-            "/usr/sbin/ip",
-            "-4",
-            "-o",
-            "addr",
-            "show",
-            "dev",
-            INTERFACE,
-            "scope",
-            "global",
-        ]
-    )
+def discover_bound_dhcp_identity() -> tuple[str, ipaddress.IPv4Address, str]:
+    """Reuse the authoritative DHCP route detector; never guess a new uplink.
 
-    candidates: list[ipaddress.IPv4Address] = []
-
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if "dynamic" not in fields:
-            continue
-
+    Interface and subnet are selected from current kernel DHCP routes. An
+    explicitly configured historical ingress boundary remains an optional
+    *constraint*, not a fallback topology or an authorization to scan.
+    """
+    try:
+        identity = current_identity(INTERFACE)
+    except NetworkDiscoveryError as exc:
+        raise ReconcileError(f"active DHCP route cannot be proved: {exc}") from exc
+    address = ipaddress.IPv4Address(identity["ipv4"])
+    active_network = ipaddress.IPv4Network(identity["cidr"])
+    if APPROVED_NETWORK:
         try:
-            index = fields.index("inet")
-            address = ipaddress.ip_interface(fields[index + 1]).ip
-        except (ValueError, IndexError) as exc:
-            raise ReconcileError(f"unable to parse interface address: {line}") from exc
+            approved = ipaddress.IPv4Network(APPROVED_NETWORK, strict=True)
+        except ValueError as exc:
+            raise ReconcileError("invalid approved ingress network") from exc
+        if not active_network.subnet_of(approved):
+            raise ReconcileError("current DHCP subnet is outside approved ingress boundary")
+    return identity["interface"], address, str(active_network)
 
-        if not isinstance(address, ipaddress.IPv4Address):
-            continue
-        if address == DNS_SERVICE_IP:
-            continue
-        if address not in NETWORK:
-            raise ReconcileError(f"dynamic address outside approved network: {address}")
-        if not address.is_private:
-            raise ReconcileError(f"dynamic address is not private: {address}")
 
-        candidates.append(address)
-
-    if len(candidates) != 1:
-        raise ReconcileError(
-            f"expected exactly one approved dynamic IPv4 on {INTERFACE}; found {len(candidates)}"
-        )
-
-    return candidates[0]
+def discover_dynamic_ipv4() -> ipaddress.IPv4Address:
+    """Compatibility accessor used by existing DNS discovery callers."""
+    return discover_bound_dhcp_identity()[1]
 
 
 def authoritative_addresses() -> list[ipaddress.IPv4Address]:
@@ -154,7 +139,7 @@ def signed_update(address: ipaddress.IPv4Address) -> None:
 
 
 def reconcile() -> dict[str, object]:
-    actual = discover_dynamic_ipv4()
+    interface, actual, active_network = discover_bound_dhcp_identity()
     before = authoritative_addresses()
 
     if before == [actual]:
@@ -162,7 +147,8 @@ def reconcile() -> dict[str, object]:
             "schema": "aegisscan.production-ddns-reconcile.v1",
             "status": "success",
             "action": "unchanged",
-            "interface": INTERFACE,
+            "interface": interface,
+            "network_observed": active_network,
             "address": str(actual),
             "fqdn": FQDN.rstrip("."),
             "dns_server": DNS_SERVER,
@@ -181,7 +167,8 @@ def reconcile() -> dict[str, object]:
         "schema": "aegisscan.production-ddns-reconcile.v1",
         "status": "success",
         "action": "updated",
-        "interface": INTERFACE,
+        "interface": interface,
+        "network_observed": active_network,
         "address": str(actual),
         "fqdn": FQDN.rstrip("."),
         "dns_server": DNS_SERVER,

@@ -13,7 +13,8 @@ def test_systemd_ddns_contract_is_hardened_periodic_and_environment_bound():
     assert "NoNewPrivileges=yes" in service
     assert "ProtectSystem=strict" in service
     assert "IPAddressDeny=any" in service
-    assert "IPAddressAllow=192.168.49.53/32" in service
+    assert "IPAddressAllow=127.0.0.1/32" in service
+    assert "IPAddressAllow=192.168.49." not in service
     assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK" in service
     assert "EnvironmentFile=-/etc/aegisscan/ddns-reconcile.env" in service
     assert "OnBootSec=20s" in timer
@@ -80,7 +81,7 @@ def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
     assert 'RUNTIME_ENV_FILE="/etc/aegisscan/ddns-reconcile.env"' in script
     assert 'AEGIS_DDNS_INTERFACE=$INTERFACE' in script
-    assert 'AEGIS_DDNS_SERVER=$DNS_SERVICE_IP' in script
+    assert 'AEGIS_DDNS_SERVER=127.0.0.1' in script
     assert 'AEGIS_DNS_SERVICE_IP=$DNS_SERVICE_IP' in script
     assert 'AEGIS_DDNS_NETWORK=$INTERNAL_CIDR' in script
     assert 'AEGIS_DDNS_FQDN=$FQDN_ABS' in script
@@ -91,7 +92,7 @@ def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     assert 'grant $TSIG_NAME name $FQDN_ABS A;' in script
     assert 'ns1.$ZONE_NAME.' in script
     assert '$HOST_LABEL IN  A   $APP_IP' in script
-    assert '-e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|"' in script
+    assert 'IPAddressAllow=$DNS_SERVICE_IP/32' not in script
 
 
 def _run_mac_independent_repair(tmp_path, *, source, actual_mac="00:50:56:31:fe:8b"):
@@ -240,3 +241,33 @@ def test_dns_bootstrap_rejects_bad_dhcp_gateway(tmp_path):
     for upstream in ("192.168.49.53", "192.168.49.136", "8.8.8.8", "::1", "not-an-ip"):
         result = _run_gateway_dns_guard(tmp_path, upstream)
         assert result.returncode != 0, (upstream, result.stdout, result.stderr)
+
+
+def test_ddns_installer_deploys_existing_dhcp_identity_sibling_before_reconciler():
+    """A /usr/local/sbin production installation must not lose its only DHCP detector."""
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    network_copy = '"$PLATFORM_DIR/scripts/production_network_identity.py"'
+    reconciler_copy = '"$PLATFORM_DIR/scripts/production_ddns_reconcile.py"'
+    assert script.count(network_copy) == 1
+    assert script.index(network_copy) < script.index(reconciler_copy)
+    assert '/usr/local/sbin/production_network_identity.py' in script
+    ddns = (ROOT / "aegis-platform/scripts/production_ddns_reconcile.py").read_text()
+    assert 'from production_network_identity import NetworkDiscoveryError, current_identity' in ddns
+    assert 'AEGIS_DDNS_INTERFACE", "ens33"' not in ddns
+    assert 'AEGIS_DDNS_SERVER", "192.168.49.' not in ddns
+    assert 'AEGIS_DDNS_NETWORK", "192.168.49.' not in ddns
+
+
+def test_ddns_installed_entrypoint_imports_approved_existing_discovery(tmp_path):
+    """Simulate the real /usr/local/sbin sibling deployment (no mutable OS)."""
+    import shutil
+    reconciler = tmp_path / 'aegisscan-ddns-reconcile'
+    detector = tmp_path / 'production_network_identity.py'
+    shutil.copy(ROOT / 'aegis-platform/scripts/production_ddns_reconcile.py', reconciler)
+    shutil.copy(ROOT / 'aegis-platform/scripts/production_network_identity.py', detector)
+    result = subprocess.run(
+        [sys.executable, '-c', 'import runpy,sys;sys.path.insert(0,sys.argv[1]);runpy.run_path(sys.argv[2],run_name="isolated_test")',
+         str(tmp_path), str(reconciler)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr

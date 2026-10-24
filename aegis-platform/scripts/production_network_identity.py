@@ -183,6 +183,10 @@ def windows_host_identity(records: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(records, list):
         raise NetworkDiscoveryError("invalid Windows adapter inventory")
     available: list[dict[str, Any]] = []
+    # Physical LAN identity is not the same as a route to the application.
+    # VMware/Hyper-V/VPN adapters can be possible *connection paths* without
+    # implicitly enrolling their subnets as targets for security scans.
+    service_candidates: list[dict[str, Any]] = []
     for record in records:
         if not isinstance(record, dict) or record.get("up") is not True:
             continue
@@ -190,14 +194,26 @@ def windows_host_identity(records: list[dict[str, Any]]) -> dict[str, Any]:
         description = str(record.get("description", "")).lower()
         if not isinstance(name, str) or not name.strip():
             continue
-        if any(part in description for part in ("vmware", "virtual", "vpn", "hyper-v", "loopback", "tap-", "docker")):
-            continue
+        is_virtual = any(part in description for part in (
+            "vmware", "virtual", "vpn", "hyper-v", "loopback", "tap-", "docker"
+        ))
         try:
             address = ipaddress.IPv4Interface(f'{record["ipv4"]}/{int(record["prefix"])}')
             index = int(record["index"])
         except (KeyError, ValueError, TypeError):
             continue
         if index < 1 or not _approved(address.ip):
+            continue
+        service_candidates.append({
+            "interface": name,
+            "interface_index": index,
+            "ipv4": str(address.ip),
+            "subnet": str(address.network),
+            "origin": "windows-active-adapter",
+            "route_validation": "required",
+            "scan_authorization": "not-inferred-from-connectivity",
+        })
+        if is_virtual:
             continue
         gateway_string = record.get("gateway")
         if gateway_string:
@@ -217,10 +233,13 @@ def windows_host_identity(records: list[dict[str, Any]]) -> dict[str, Any]:
             "origin": "windows-active-adapter",
         })
     available.sort(key=lambda x: (x["gateway"] is None, x["interface_index"], x["ipv4"]))
+    service_candidates.sort(key=lambda x: (x["interface_index"], x["ipv4"]))
     return {
         "schema": "aegisscan.windows-host-lan.v1",
         "platform": "windows",
         "networks": available,
+        "service_connection_candidates": service_candidates,
+        "service_selection": "reachability-and-verified-tls-required",
         "scan_authorization": "not-inferred-from-network-access",
     }
 
@@ -232,8 +251,10 @@ def discover_windows_host() -> dict[str, Any]:
     script = r"""
 $ErrorActionPreference = 'Stop'
 $records = @()
-$physical = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })
-foreach ($adapter in $physical) {
+# Inspect both virtual and physical routes for *service reachability*.
+# windows_host_identity still excludes virtual adapters from scan-LAN identity.
+$adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
+foreach ($adapter in $adapters) {
   $idx = [int]$adapter.ifIndex
   $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $idx -ErrorAction SilentlyContinue |
       Where-Object { $_.AddressState -eq 'Preferred' })

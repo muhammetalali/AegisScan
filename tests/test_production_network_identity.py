@@ -229,3 +229,47 @@ def test_windows_entrypoint_detects_lan_from_relative_project_tree():
     assert "ExecutionPolicy Bypass" not in starter
     assert "192.168.49." not in starter
     assert "VMnet8" not in starter
+
+
+def test_vmware_adapter_is_a_service_candidate_without_becoming_scan_scope():
+    records = [
+        {"name": "VMware Network Adapter VMnet8",
+         "description": "VMware Virtual Ethernet Adapter", "index": 35,
+         "up": True, "ipv4": "192.168.49.1", "prefix": 24, "gateway": None},
+        {"name": "Ethernet", "description": "Intel Ethernet", "index": 7,
+         "up": True, "ipv4": "10.12.34.56", "prefix": 24, "gateway": "10.12.34.1"},
+    ]
+    result = network.windows_host_identity(records)
+    assert result["networks"] == [{
+        "interface": "Ethernet", "interface_index": 7,
+        "ipv4": "10.12.34.56", "subnet": "10.12.34.0/24",
+        "gateway": "10.12.34.1", "origin": "windows-active-adapter",
+    }]
+    assert {row["interface"] for row in result["service_connection_candidates"]} == {
+        "Ethernet", "VMware Network Adapter VMnet8",
+    }
+    assert all(row["route_validation"] == "required" for row in result["service_connection_candidates"])
+    assert all(row["scan_authorization"] == "not-inferred-from-connectivity"
+               for row in result["service_connection_candidates"])
+    assert result["service_selection"] == "reachability-and-verified-tls-required"
+
+
+def test_windows_service_candidates_change_with_active_adapter_not_saved_ip():
+    def connection(name, ip):
+        return [{"name": name, "description": "Intel Ethernet",
+                 "index": 10, "up": True, "ipv4": ip, "prefix": 24,
+                 "gateway": None}]
+    before = network.windows_host_identity(connection("Ethernet", "10.4.5.6"))
+    after = network.windows_host_identity(connection("Wi-Fi", "192.168.72.3"))
+    assert before["service_connection_candidates"][0]["subnet"] == "10.4.5.0/24"
+    assert after["service_connection_candidates"][0]["subnet"] == "192.168.72.0/24"
+    assert before["scan_authorization"] == after["scan_authorization"]
+
+
+def test_down_virtual_adapter_never_masquerades_as_connected_service_path():
+    result = network.windows_host_identity([{
+        "name": "VMware", "description": "VMware Virtual Ethernet",
+        "index": 25, "up": False, "ipv4": "192.168.9.1", "prefix": 24,
+    }])
+    assert result["service_connection_candidates"] == []
+    assert result["networks"] == []
