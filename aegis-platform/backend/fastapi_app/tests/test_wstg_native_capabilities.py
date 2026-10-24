@@ -367,8 +367,11 @@ def test_native_worker_propagates_persisted_approval_into_wstg(monkeypatch):
     from django.apps import apps
     import os
     from types import SimpleNamespace
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+    monkeypatch.setenv('DJANGO_SETTINGS_MODULE', 'django_project.settings')
     if not apps.ready:
+        # Isolated unit test only; no production secret or network is used.
+        monkeypatch.setenv('DEBUG', 'true')
+        monkeypatch.setenv('SECRET_KEY', 'isolated-wstg-unit-test-only-key-0000000000')
         django.setup()
     from fastapi_app.tasks import native_capabilities as worker
 
