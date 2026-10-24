@@ -13,12 +13,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit, client_ip_from_request
 from .auth_audit import record_login_event
-from .authentication import revoke_outstanding_refresh_tokens
+from .authentication import revoke_outstanding_refresh_tokens, bump_auth_version
 from .serializers import UserSerializer
 from .models import User
 
@@ -45,8 +46,49 @@ def _set_auth_cookies(response, access: str, refresh: str | None = None) -> None
         )
 
 
-class LoginView(APIView):
+class VersionedTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token['auth_version'] = user.auth_version
+        return token
+
+
+class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs):
+        # Validate the persisted generation BEFORE minting or rotating any JWT.
+        try:
+            refresh = self.token_class(attrs['refresh'])
+        except TokenError as exc:
+            raise AuthenticationFailed('Authentication session revoked.', code='session_revoked') from exc
+        uid = refresh.payload.get('user_id')
+        generation = refresh.payload.get('auth_version')
+        account = User.objects.filter(pk=uid).first() if uid is not None else None
+        if (not account or not account.is_active or account.two_factor_enabled
+                or type(generation) is not int
+                or generation != account.auth_version):
+            raise AuthenticationFailed('Authentication session revoked.', code='session_revoked')
+        try:
+            return super().validate(attrs)
+        except TokenError as exc:
+            raise AuthenticationFailed('Authentication session revoked.', code='session_revoked') from exc
+
+
+class PublicCredentialAPIView(APIView):
+    """Allow re-login with an obsolete cookie while preserving 401 semantics.
+
+    DRF translates AuthenticationFailed to HTTP 403 when no authentication
+    scheme supplies an authenticate header. These public credential endpoints
+    deliberately skip old cookies, but must retain their 401 API contract.
+    """
+    authentication_classes = []
     permission_classes = [AllowAny]
+
+    def get_authenticate_header(self, request):
+        return 'Bearer'
+
+
+class LoginView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=False))
@@ -76,7 +118,7 @@ class LoginView(APIView):
                     {'detail': 'Second-factor verification is required but is not configured. Contact an administrator.'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-        serializer = TokenObtainPairSerializer(data=request.data)
+        serializer = VersionedTokenObtainPairSerializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
         except APIException as exc:
@@ -118,8 +160,7 @@ class RegisterView(APIView):
         )
 
 
-class RefreshView(APIView):
-    permission_classes = [AllowAny]
+class RefreshView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='20/m', method='POST', block=True))
@@ -128,7 +169,7 @@ class RefreshView(APIView):
         if not refresh:
             return Response({'detail': 'Refresh token is required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        serializer = TokenRefreshSerializer(data={'refresh': refresh})
+        serializer = VersionedTokenRefreshSerializer(data={'refresh': refresh})
         serializer.is_valid(raise_exception=True)
         access = serializer.validated_data['access']
         rotated_refresh = serializer.validated_data.get('refresh')
@@ -137,8 +178,7 @@ class RefreshView(APIView):
         return response
 
 
-class LogoutView(APIView):
-    permission_classes = [AllowAny]
+class LogoutView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     def post(self, request):
@@ -178,6 +218,7 @@ class DeactivateSelfView(APIView):
             request.user.is_active = False
             request.user.save(update_fields=['is_active'])
             revoke_outstanding_refresh_tokens(request.user)
+            bump_auth_version(request.user)
             append_audit(
                 user=request.user,
                 action=AuditLog.Action.USER_UPDATE,

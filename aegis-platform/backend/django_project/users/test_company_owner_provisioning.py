@@ -599,6 +599,7 @@ def test_account_revocation_blacklists_refresh_even_after_later_activation(
         role=UserRole.VIEWER,
         is_active=True,
     )
+    generation_before = employee.auth_version
     stale = RefreshToken.for_user(employee)
     unrelated = RefreshToken.for_user(company_owner)
     original = OutstandingToken.objects.get(jti=stale['jti'])
@@ -617,11 +618,14 @@ def test_account_revocation_blacklists_refresh_even_after_later_activation(
 
     employee.refresh_from_db()
     assert not employee.is_active
+    assert employee.auth_version == generation_before + 1
     assert BlacklistedToken.objects.filter(token=original).exists()
     assert not BlacklistedToken.objects.filter(token=keep).exists()
 
     # Re-enabling an account cannot revive refresh credentials from its prior life.
     assert owner.post(endpoint + 'activate/', {}, format='json').status_code == 200
+    employee.refresh_from_db()
+    assert employee.auth_version == generation_before + 2
     with pytest.raises(TokenError):
         RefreshToken(str(stale))
     assert not BlacklistedToken.objects.filter(token=keep).exists()

@@ -272,3 +272,95 @@ def test_mfa_flag_wrong_password_does_not_disclose_enrollment():
     assert 'Second-factor verification' not in str(response.content)
     assert 'aegis_access' not in response.cookies
     assert 'aegis_refresh' not in response.cookies
+
+
+@pytest.mark.django_db
+def test_django_cookie_bearer_refresh_stale_access_cannot_revive_after_reactivation():
+    from django_project.users.authentication import bump_auth_version
+    from rest_framework.test import APIClient
+    from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+
+    user = User.objects.create_user(
+        email='generation-revocation@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    login = client.post('/api/v1/auth/login/', {
+        'email': user.email, 'password': 'Strong-Test-Password-123!',
+    }, HTTP_X_CSRFTOKEN=csrf)
+    assert login.status_code == 200
+    old_access = login.cookies['aegis_access'].value
+    old_refresh = login.cookies['aegis_refresh'].value
+    assert AccessToken(old_access)['auth_version'] == user.auth_version
+    assert RefreshToken(old_refresh)['auth_version'] == user.auth_version
+    assert client.get('/api/v1/auth/users/me/').status_code == 200
+
+    user.is_active = False
+    user.save(update_fields=['is_active'])
+    bump_auth_version(user)
+    user.is_active = True
+    user.save(update_fields=['is_active'])
+
+    assert client.get('/api/v1/auth/users/me/').status_code == 401
+    bearer = APIClient()
+    bearer.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+    assert bearer.get('/api/v1/auth/users/me/').status_code == 401
+
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    client.cookies['aegis_refresh'] = old_refresh
+    assert client.post('/api/v1/auth/refresh/', {},
+                       HTTP_X_CSRFTOKEN=csrf).status_code == 401
+
+    # Ordinary re-login issues new-generation tokens without recreating user.
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    renewed = client.post('/api/v1/auth/login/', {
+        'email': user.email, 'password': 'Strong-Test-Password-123!',
+    }, HTTP_X_CSRFTOKEN=csrf)
+    assert renewed.status_code == 200
+    assert AccessToken(renewed.cookies['aegis_access'].value)[
+        'auth_version'] == user.auth_version
+    assert client.get('/api/v1/auth/users/me/').status_code == 200
+
+
+@pytest.mark.django_db
+def test_legacy_versionless_jwt_is_denied_without_recreating_user():
+    from rest_framework.test import APIClient
+    from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+
+    user = User.objects.create_user(
+        email='legacy-jwt-revocation@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    legacy_access = str(AccessToken.for_user(user))
+    legacy_refresh = str(RefreshToken.for_user(user))
+    bearer = APIClient()
+    bearer.credentials(HTTP_AUTHORIZATION=f'Bearer {legacy_access}')
+    assert bearer.get('/api/v1/auth/users/me/').status_code == 401
+    client = Client(enforce_csrf_checks=True)
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    client.cookies['aegis_refresh'] = legacy_refresh
+    assert client.post('/api/v1/auth/refresh/', {},
+                       HTTP_X_CSRFTOKEN=csrf).status_code == 401
+
+
+@pytest.mark.django_db
+def test_django_session_hash_invalidated_on_auth_version_change():
+    """Django sessions cannot return after account suspension/reactivation."""
+    from django_project.users.authentication import bump_auth_version
+    account = User.objects.create_user(
+        email='generation-django-session@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    old_hash = account.get_session_auth_hash()
+    client = Client()
+    client.force_login(account)
+    assert client.get('/api/v1/auth/users/me/').status_code == 200
+
+    account.is_active = False
+    account.save(update_fields=['is_active'])
+    bump_auth_version(account)
+    account.is_active = True
+    account.save(update_fields=['is_active'])
+    assert account.get_session_auth_hash() != old_hash
+    assert client.get('/api/v1/auth/users/me/').status_code in (401, 403)
