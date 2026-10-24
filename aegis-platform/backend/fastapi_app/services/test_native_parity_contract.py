@@ -172,3 +172,55 @@ def test_nikto_adapter_disables_updates_and_uses_secure_file_capture():
     assert spec.suffix_args[-2:] == ('-Format', 'json')
     assert spec.capture_mode == 'nikto-json-file'
     assert '/dev/stdout' not in spec.suffix_args
+
+
+def test_content_discovery_adapters_bounded_wildcard_and_autocalibration_contract():
+    from fastapi_app.services.native_tool_runtime import get_native_tool_spec, validate_native_options
+
+    gobuster = get_native_tool_spec('web.gobuster')
+    assert validate_native_options(gobuster, {'exclude_length': 15})['exclude_length'] == 15
+    for invalid in (0, -1, 1000001, 'not-a-length'):
+        with pytest.raises(ValueError):
+            validate_native_options(gobuster, {'exclude_length': invalid})
+    assert gobuster.option_map['exclude_length'].flag == '--exclude-length'
+    assert '-ac' in get_native_tool_spec('web.ffuf').suffix_args
+    assert '-r' not in get_native_tool_spec('web.ffuf').suffix_args
+    # Nikto must not follow unchecked redirects into a different authorization scope.
+    assert '-followredirects' not in get_native_tool_spec('web.nikto').suffix_args
+
+
+def test_dirb_uses_private_resume_workspace_and_cleans_after_execution(monkeypatch):
+    from fastapi_app.services import native_tool_runtime as runtime
+
+    observation = {}
+
+    def prepared_command(*_args, **_kwargs):
+        return ['/usr/bin/dirb', 'https://reserved.example.invalid', '-S'], 'https://reserved.example.invalid'
+
+    class NoNetworkProcess:
+        returncode = 0
+
+        def __init__(self, args, **kwargs):
+            self.args = args
+            self.cwd = kwargs['cwd']
+            assert self.cwd is not None
+            workspace = Path(self.cwd)
+            assert workspace.is_dir()
+            assert (workspace / '.cache' / 'dirb' / 'resume').is_dir()
+            assert workspace.stat().st_mode & 0o777 == 0o700
+            assert kwargs['shell'] is False
+            observation['workspace'] = workspace
+
+        def poll(self):
+            return 0
+
+        def communicate(self, timeout=None):
+            return 'local smoke result', ''
+
+    monkeypatch.setattr(runtime, 'build_native_argv', prepared_command)
+    monkeypatch.setattr(runtime.subprocess, 'Popen', NoNetworkProcess)
+    result = runtime.run_native_tool(
+        'web.dirb', 'https://reserved.example.invalid', {},
+    )
+    assert result.exit_code == 0
+    assert not observation['workspace'].exists()

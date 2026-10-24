@@ -108,10 +108,10 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
         credential_mode='browser-session-file',
         credential_kinds=('generic',),
     ),
-    'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
+    'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50)), ('exclude_length', OptionSpec('--exclude-length', 'int', None, 1, 1000000))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent', '--no-state'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50)), ('depth', OptionSpec('-d', 'int', 2, 1, 4))), timeout=1200),
-    'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
+    'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-ac', '-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
     'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-nocheck', '-nointeractive', '-Format', 'json'), timeout=1200, capture_mode='nikto-json-file'),
     'web.waf-detection': NativeToolSpec('web.waf-detection', 'wafw00f', 'web-fingerprinting', 'Web application firewall fingerprinting.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=300),
     'container.trivy-image': NativeToolSpec('container.trivy-image', 'trivy', 'container-security', 'Container image vulnerability and misconfiguration assessment.', 'docker', ('docker_image',), 'passive', 'image', None, prefix_args=('image', '--format', 'json', '--quiet'), timeout=1800),
@@ -482,6 +482,17 @@ def run_native_tool(
             report_prefix = str(Path(report_dir) / 'report')
             captured_report_path = f'{report_prefix}.json'
             argv.extend(['-output', report_prefix])
+        # DIRB writes .cache/dirb/resume relative to its working directory.
+        # Give each scan a private writable workspace under the existing tmpfs,
+        # never broaden permissions or write under the read-only /app tree.
+        isolated_cwd = None
+        if spec.capability_id == 'web.dirb':
+            isolated_cwd = tempfile.mkdtemp(prefix='aegis-dirb-')
+            os.chmod(isolated_cwd, 0o700)
+            cleanup_dirs.append(isolated_cwd)
+            Path(isolated_cwd, '.cache', 'dirb', 'resume').mkdir(
+                parents=True, exist_ok=True, mode=0o700,
+            )
         process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -490,7 +501,8 @@ def run_native_tool(
             shell=False,
             start_new_session=True,
             env=_native_environment(spec),
-            umask=0o077 if captured_report_path is not None else -1,
+            cwd=isolated_cwd,
+            umask=0o077 if captured_report_path is not None or isolated_cwd is not None else -1,
         )
         deadline = time.monotonic() + execution_timeout
         paused = False
