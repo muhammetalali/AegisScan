@@ -252,7 +252,8 @@ def test_ddns_installer_deploys_existing_dhcp_identity_sibling_before_reconciler
     assert script.index(network_copy) < script.index(reconciler_copy)
     assert '/usr/local/sbin/production_network_identity.py' in script
     ddns = (ROOT / "aegis-platform/scripts/production_ddns_reconcile.py").read_text()
-    assert 'from production_network_identity import NetworkDiscoveryError, current_identity' in ddns
+    assert 'from production_network_identity import (' in ddns
+    assert 'current_identity, current_dns_binding_identity' in ddns
     assert 'AEGIS_DDNS_INTERFACE", "ens33"' not in ddns
     assert 'AEGIS_DDNS_SERVER", "192.168.49.' not in ddns
     assert 'AEGIS_DDNS_NETWORK", "192.168.49.' not in ddns

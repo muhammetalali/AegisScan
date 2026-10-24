@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from production_network_identity import NetworkDiscoveryError, current_identity
+from production_network_identity import (NetworkDiscoveryError, current_identity, current_dns_binding_identity)
 
 # The FQDN is a stable *identity*, never a static network locator.
 # Explicit interface/network overrides remain supported for legacy approved
@@ -54,7 +54,7 @@ def run(
         raise ReconcileError(f"command failed: {' '.join(argv)}: {detail}") from exc
 
 
-def discover_bound_dhcp_identity() -> tuple[str, ipaddress.IPv4Address, str]:
+def discover_bound_dhcp_identity(previous_addresses: tuple[str, ...] = ()) -> tuple[str, ipaddress.IPv4Address, str]:
     """Reuse the authoritative DHCP route detector; never guess a new uplink.
 
     Interface and subnet are selected from current kernel DHCP routes. An
@@ -64,7 +64,15 @@ def discover_bound_dhcp_identity() -> tuple[str, ipaddress.IPv4Address, str]:
     try:
         identity = current_identity(INTERFACE)
     except NetworkDiscoveryError as exc:
-        raise ReconcileError(f"active DHCP route cannot be proved: {exc}") from exc
+        if INTERFACE is not None or "equally preferred" not in str(exc):
+            raise ReconcileError(f"active DHCP route cannot be proved: {exc}") from exc
+        try:
+            identity = current_dns_binding_identity(
+                approved_network=APPROVED_NETWORK,
+                previous_addresses=previous_addresses,
+            )
+        except NetworkDiscoveryError as ambiguous:
+            raise ReconcileError(f"active DHCP route cannot be proved: {ambiguous}") from ambiguous
     address = ipaddress.IPv4Address(identity["ipv4"])
     active_network = ipaddress.IPv4Network(identity["cidr"])
     if APPROVED_NETWORK:
@@ -139,8 +147,19 @@ def signed_update(address: ipaddress.IPv4Address) -> None:
 
 
 def reconcile() -> dict[str, object]:
-    interface, actual, active_network = discover_bound_dhcp_identity()
-    before = authoritative_addresses()
+    # Check the DHCP trust boundary first; only an ambiguous multi-NIC host
+    # needs the existing signed DNS record as an additional tie-breaker.
+    try:
+        interface, actual, active_network = discover_bound_dhcp_identity()
+    except ReconcileError as exc:
+        if INTERFACE is not None or "equally preferred" not in str(exc):
+            raise
+        before = authoritative_addresses()
+        interface, actual, active_network = discover_bound_dhcp_identity(
+            tuple(str(value) for value in before)
+        )
+    else:
+        before = authoritative_addresses()
 
     if before == [actual]:
         return {

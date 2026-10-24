@@ -84,7 +84,7 @@ def test_ambiguous_network_fails_closed_without_guessing(monkeypatch):
 
 def test_reconcile_noop_when_authoritative_record_matches(monkeypatch):
     expected = ipaddress.ip_address("192.168.49.134")
-    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda: ("enp7s0", expected, "192.168.49.0/24"))
+    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda *_: ("enp7s0", expected, "192.168.49.0/24"))
     monkeypatch.setattr(ddns, "authoritative_addresses", lambda: [expected])
 
     def unexpected_update(_):
@@ -100,7 +100,7 @@ def test_reconcile_updates_then_verifies(monkeypatch):
     expected = ipaddress.ip_address("192.168.49.134")
     states = iter([[], [expected]])
     updates = []
-    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda: ("enp7s0", expected, "192.168.49.0/24"))
+    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda *_: ("enp7s0", expected, "192.168.49.0/24"))
     monkeypatch.setattr(ddns, "authoritative_addresses", lambda: next(states))
     monkeypatch.setattr(ddns, "signed_update", updates.append)
     result = ddns.reconcile()
@@ -112,7 +112,7 @@ def test_reconcile_fails_closed_on_post_update_mismatch(monkeypatch):
     expected = ipaddress.ip_address("192.168.49.134")
     wrong = ipaddress.ip_address("192.168.49.200")
     states = iter([[], [wrong]])
-    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda: ("enp7s0", expected, "192.168.49.0/24"))
+    monkeypatch.setattr(ddns, "discover_bound_dhcp_identity", lambda *_: ("enp7s0", expected, "192.168.49.0/24"))
     monkeypatch.setattr(ddns, "authoritative_addresses", lambda: next(states))
     monkeypatch.setattr(ddns, "signed_update", lambda _: None)
     with pytest.raises(ddns.ReconcileError, match="verification failed"):
@@ -124,7 +124,7 @@ def test_reconcile_tracks_new_dhcp_lease_and_updates_the_same_fqdn(monkeypatch):
     old = ipaddress.ip_address('10.21.7.134')
     new = ipaddress.ip_address('10.21.7.199')
     monkeypatch.setattr(ddns, 'discover_bound_dhcp_identity',
-                        lambda: ('enp7s0', new, '10.21.7.0/24'))
+                        lambda *_: ('enp7s0', new, '10.21.7.0/24'))
     states = iter([[old], [new]])
     signed = []
     monkeypatch.setattr(ddns, 'authoritative_addresses', lambda: next(states))
@@ -148,3 +148,28 @@ def test_untrusted_network_fails_before_signed_dns_update(monkeypatch):
                         lambda: (_ for _ in ()).throw(AssertionError('DNS queried before trust gate')))
     with pytest.raises(ddns.ReconcileError, match='outside approved ingress'):
         ddns.reconcile()
+
+
+def test_multihomed_reconciler_uses_signed_dns_before_updating(monkeypatch):
+    from production_network_identity import NetworkDiscoveryError
+    expected = ipaddress.ip_address("10.21.7.134")
+    monkeypatch.setattr(ddns, "INTERFACE", None)
+    monkeypatch.setattr(ddns, "APPROVED_NETWORK", None)
+    def ambiguous(interface):
+        raise NetworkDiscoveryError("multiple equally preferred IPv4 default routes")
+    monkeypatch.setattr(ddns, "current_identity", ambiguous)
+    seen = []
+    def bound(*, approved_network, previous_addresses):
+        seen.append(previous_addresses)
+        if not previous_addresses:
+            raise NetworkDiscoveryError('multiple equally preferred DHCP service interfaces without trusted evidence')
+        return _identity()
+    monkeypatch.setattr(ddns, "current_dns_binding_identity", bound)
+    monkeypatch.setattr(ddns, "authoritative_addresses", lambda: [expected])
+    monkeypatch.setattr(ddns, "signed_update",
+                        lambda _: (_ for _ in ()).throw(AssertionError("should not rewrite")))
+    result = ddns.reconcile()
+    assert seen == [(), ("10.21.7.134",)]
+    assert result["status"] == "success"
+    assert result["action"] == "unchanged"
+    assert result["interface"] == "enp7s0"

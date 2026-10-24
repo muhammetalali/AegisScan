@@ -127,6 +127,70 @@ def current_identity(selected_interface: str | None = None) -> dict[str, str]:
 
 
 
+def current_dns_binding_identity(
+    *, approved_network: str | None = None,
+    previous_addresses: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """Resolve multi-uplink DHCP ambiguity using existing signed DNS identity.
+
+    Prefer the current interface containing a previously authoritative address;
+    DHCP may rotate the host IP within that same subnet. If the record cannot
+    distinguish multiple interfaces, fail closed rather than publish a guess.
+    """
+    routes = _ip_json("route", "show", "default")
+    trusted = None
+    if approved_network:
+        try:
+            trusted = ipaddress.IPv4Network(approved_network, strict=True)
+        except ValueError as exc:
+            raise NetworkDiscoveryError("invalid approved ingress boundary") from exc
+
+    previous: set[ipaddress.IPv4Address] = set()
+    for entry in previous_addresses:
+        try:
+            previous.add(ipaddress.IPv4Address(entry))
+        except ValueError as exc:
+            raise NetworkDiscoveryError("invalid previous authoritative DNS address") from exc
+
+    candidates: list[tuple[int, dict[str, str]]] = []
+    for route in routes:
+        name = route.get("dev")
+        if route.get("dst") != "default" or not isinstance(name, str):
+            continue
+        if not IFACE_RE.fullmatch(name) or name.startswith(("docker", "br-", "veth", "virbr")):
+            continue
+        try:
+            metric = int(route.get("metric", 0))
+            if metric < 0 or any(x["interface"] == name for _, x in candidates):
+                continue
+            identity = discover(routes, _ip_json("addr", "show", "dev", name), selected_interface=name)
+            candidate_cidr = ipaddress.IPv4Network(identity["cidr"])
+            if trusted is not None and not candidate_cidr.subnet_of(trusted):
+                continue
+            candidates.append((metric, identity))
+        except (NetworkDiscoveryError, ValueError, TypeError):
+            continue
+    if not candidates:
+        raise NetworkDiscoveryError("no approved active DHCP service interface")
+
+    # A signed A record is a historical service identity, not a scope grant.
+    # Restrict to current dynamic DHCP routes and an optional approved ingress.
+    signed_matches = [
+        identity for _, identity in candidates
+        if any(ip in ipaddress.IPv4Network(identity["cidr"]) for ip in previous)
+    ]
+    if len(signed_matches) == 1:
+        return signed_matches[0]
+    if len(signed_matches) > 1:
+        raise NetworkDiscoveryError("signed DNS identity matches multiple DHCP networks")
+    if len(candidates) == 1:
+        return candidates[0][1]
+    candidates.sort(key=lambda item: item[0])
+    if candidates[0][0] < candidates[1][0]:
+        return candidates[0][1]
+    raise NetworkDiscoveryError("multiple equally preferred DHCP service interfaces without trusted evidence")
+
+
 def selected_target_route(target: str) -> dict[str, Any]:
     """Describe the guest OS route to one requested IPv4, without probing it.
 

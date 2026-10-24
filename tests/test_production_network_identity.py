@@ -273,3 +273,54 @@ def test_down_virtual_adapter_never_masquerades_as_connected_service_path():
     }])
     assert result["service_connection_candidates"] == []
     assert result["networks"] == []
+
+
+def test_multihomed_dns_reuses_trusted_signed_record_on_current_dhcp(monkeypatch):
+    routes = route("192.168.49.2", "ens33", 1024) + route("172.23.192.1", "ens37", 1024)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "ens33"):
+            return addr("192.168.49.136", 24, "ens33")
+        if parts == ("addr", "show", "dev", "ens37"):
+            return addr("172.23.201.247", 20, "ens37")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    assert network.current_dns_binding_identity(previous_addresses=("192.168.49.134",))["interface"] == "ens33"
+    assert network.current_dns_binding_identity(previous_addresses=("172.23.201.200",))["interface"] == "ens37"
+
+
+def test_multihomed_dns_rejects_untrusted_new_subnet(monkeypatch):
+    routes = route("10.21.7.1", "ens35", 100) + route("172.22.16.1", "ens36", 100)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "ens35"):
+            return addr("10.21.7.123", 24, "ens35")
+        if parts == ("addr", "show", "dev", "ens36"):
+            return addr("172.22.16.15", 24, "ens36")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    assert network.current_dns_binding_identity(
+        approved_network="10.21.0.0/16", previous_addresses=("10.21.7.100",)
+    )["ipv4"] == "10.21.7.123"
+    with pytest.raises(network.NetworkDiscoveryError, match="equally preferred"):
+        network.current_dns_binding_identity(previous_addresses=("10.21.9.100",))
+
+
+def test_disappeared_previous_adapter_never_selected_as_live_service_route(monkeypatch):
+    routes = route("10.66.1.1", "enp5s0", 100)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "enp5s0"):
+            return addr("10.66.1.47", 24, "enp5s0")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    current = network.current_dns_binding_identity(previous_addresses=("172.20.33.14",))
+    assert current["interface"] == "enp5s0"
+    assert current["ipv4"] == "10.66.1.47"
+    with pytest.raises(network.NetworkDiscoveryError, match="no approved"):
+        network.current_dns_binding_identity(
+            approved_network="172.20.0.0/16", previous_addresses=("172.20.33.14",)
+        )
