@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "g2-session-revocation-pr435-20261023-213923",
+  "request_id": "g0-g2-unified-auth-web-release-20261024-021450",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "3fa0cf7e630247d6bd063eb9c3d351fb893f6785",
-  "requested_at": "2026-10-23T21:39:23Z",
-  "expires_at": "2026-10-24T20:39:23Z"
+  "requested_base_sha": "9e1f0db32849d9077fbee0c762278965819d20af",
+  "requested_at": "2026-10-24T02:14:50Z",
+  "expires_at": "2026-10-25T01:14:50Z"
 }
