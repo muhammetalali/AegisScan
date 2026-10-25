@@ -50,6 +50,7 @@ class PublicPKIAdmission(unittest.TestCase):
         (self.root / "serial").write_text("1000\n")
         (self.root / "newcerts").mkdir()
         conf = self.root / "test-only.cnf"
+        self.ca_config = conf
         conf.write_text(
             "[ca]\ndefault_ca=ca_default\n[ca_default]\n"
             f"database={self.root / 'index.txt'}\n"
@@ -74,6 +75,85 @@ class PublicPKIAdmission(unittest.TestCase):
             expected_root_sha256=self.root_fingerprint,
             now=now,
         )
+
+    def _issue_synthetic_server_leaf(self) -> Path:
+        """Issue a synthetic leaf through the EXISTING test CA ledger, not production."""
+        leaf_key = self.root / "synthetic-server.key"
+        request = self.root / "synthetic-server.csr"
+        leaf = self.root / "synthetic-server.pem"
+        run(
+            "req", "-new", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(leaf_key), "-out", str(request),
+            "-subj", "/CN=aegis-prod.aegis.internal",
+        )
+        os.chmod(leaf_key, 0o600)
+        extensions = self.root / "synthetic-leaf-ext.cnf"
+        extensions.write_text(
+            "[v3_leaf]\n"
+            "basicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=serverAuth\n"
+            "subjectAltName=DNS:aegis-prod.aegis.internal\n"
+            "crlDistributionPoints=URI:http://aegis-prod.aegis.internal/pki/aegisscan-root-ca.crl\n"
+            "authorityInfoAccess=caIssuers;URI:http://aegis-prod.aegis.internal/pki/aegisscan-root-ca.cer\n"
+        )
+        run(
+            "ca", "-batch", "-notext", "-days", "2",
+            "-config", str(self.ca_config),
+            "-extfile", str(extensions), "-extensions", "v3_leaf",
+            "-in", str(request), "-out", str(leaf),
+        )
+        return leaf
+
+    def _renew_synthetic_crl(self) -> None:
+        """Regenerate a genuine signed CRL from the test CA database."""
+        pem = self.root / "synthetic-updated.crl.pem"
+        run("ca", "-gencrl", "-batch", "-config", str(self.ca_config), "-out", str(pem))
+        self.test_crl_pem = pem
+        self.crl.write_bytes(run("crl", "-in", str(pem), "-outform", "DER"))
+
+    def test_leaf_cdp_aia_good_then_revoked_is_rejected(self) -> None:
+        """The same synthetic issuer/CRL contract supports accept and revoke."""
+        leaf = self._issue_synthetic_server_leaf()
+        details = run("x509", "-in", str(leaf), "-noout", "-text").decode()
+        self.assertIn("DNS:aegis-prod.aegis.internal", details)
+        self.assertIn(
+            "URI:http://aegis-prod.aegis.internal/pki/aegisscan-root-ca.crl",
+            details,
+        )
+        self.assertIn(
+            "CA Issuers - URI:http://aegis-prod.aegis.internal/pki/aegisscan-root-ca.cer",
+            details,
+        )
+        self._renew_synthetic_crl()
+        good = subprocess.run(
+            [
+                "openssl", "verify", "-purpose", "sslserver", "-crl_check",
+                "-CAfile", str(self.cert), "-CRLfile", str(self.test_crl_pem), str(leaf),
+            ],
+            capture_output=True, timeout=25, check=False,
+        )
+        self.assertEqual(good.returncode, 0, good.stderr.decode(errors="replace"))
+        self.assertTrue(good.stdout.strip().endswith(b": OK"))
+        self.assertEqual(self.check()["production_pki_acceptance"], "NOT_IMPLIED")
+
+        run("ca", "-batch", "-config", str(self.ca_config), "-revoke", str(leaf))
+        self._renew_synthetic_crl()
+        revoked = subprocess.run(
+            [
+                "openssl", "verify", "-purpose", "sslserver", "-crl_check",
+                "-CAfile", str(self.cert), "-CRLfile", str(self.test_crl_pem), str(leaf),
+            ],
+            capture_output=True, timeout=25, check=False,
+        )
+        self.assertNotEqual(revoked.returncode, 0)
+        self.assertIn(
+            b"certificate revoked",
+            (revoked.stdout + revoked.stderr).lower(),
+        )
+        # Crypto admission checks CRL authenticity, not individual leaf status:
+        # the separate explicit revocation acceptance above is mandatory.
+        self.assertEqual(self.check()["production_pki_acceptance"], "NOT_IMPLIED")
 
     def test_valid_signed_synthetic_crl_is_crypto_only_not_ledger_proof(self) -> None:
         result = self.check()
