@@ -138,3 +138,42 @@ and current production TLS working until live cutover is accepted.
 **G4 stays PARTIAL** until all live criteria succeed. An offline synthetic
 test cannot validate Windows Schannel, browser state, historical CA
 completeness, DHCP roaming or production availability.
+
+### Reserved successor CA endpoints and fail-closed admission
+
+The **existing** production Nginx configuration reserves these additional
+exact, public-only paths under its read-only `pki-public` mount:
+
+- `http://aegis-prod.aegis.internal/pki/v2/aegisscan-root-ca.crl`
+- `http://aegis-prod.aegis.internal/pki/v2/aegisscan-root-ca.cer`
+
+Both intentionally return **404** until an independently approved successor
+CA's DER artifacts are staged and published by the privileged custodian.
+They never redirect revocation checks through HTTPS, and do not expose a
+`/pki/v2/` directory, private key or CA ledger. The preexisting original
+CA URLs, fingerprint pin and original certificate stay unchanged.
+
+Once the new identity, root certificate fingerprint, complete new issuance
+ledger and signed CRL are independently approved, use the *same* existing
+verifier, in successor mode, against a **separate non-production staging
+directory** containing only the two named public DER artifacts:
+
+```bash
+python3 aegis-platform/scripts/production_internal_pki_verify.py \
+  --profile successor \
+  --root-cert /protected/stage/NEW-CA-PUBLIC.pem \
+  --public-dir /protected/stage/public-v2 \
+  --successor-root-sha256 APPROVED_64_HEX_SHA256
+```
+
+Replace all example paths and the 64-character digest with approved values.
+The digest **must** be verified independently of the staged certificate.
+The command refuses to inherit the old fingerprint, to reuse the original
+root as successor, or to infer trust from a supplied certificate. Even a
+`G4_PUBLIC_PKI_CRYPTO=PASS` is only CRL transport/crypto admission:
+`HISTORICAL_CA_ISSUANCE_AND_REVOCATION_LEDGER=NOT_VERIFIED` and
+`PRODUCTION_PKI_ACCEPTANCE=NOT_IMPLIED` still require separate governance
+and actual Windows/Firefox revocation/failover checks.
+
+No successor signing key, ledger, trust-anchor replacement, leaf swap or
+certificate issuance is performed by this verifier or these Nginx routes.
