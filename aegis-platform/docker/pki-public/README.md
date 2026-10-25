@@ -29,6 +29,37 @@ HTTPS as before.
 5. Accept unmodified Windows Schannel/Firefox HTTPS and controlled network
    failover before closing G4. No `-k`, revocation disablement or static IP.
 
+## Fail-closed cryptographic admission before publication
+
+After an authorized CA history/revocation audit **and before** copying any
+signed public DER artifacts to the production mount, stage the two DER files in
+a separate non-production directory (for example a root-controlled staging
+path), then run:
+
+```bash
+python3 aegis-platform/scripts/production_internal_pki_verify.py \
+  --root-cert /usr/local/share/ca-certificates/aegisscan-enterprise.crt \
+  --public-dir /path/to/staged/public-der
+```
+
+The verifier is **read-only** and must return `G4_PUBLIC_PKI_CRYPTO=PASS`
+before any controlled publication. It checks the original **pinned** public
+root fingerprint, byte-for-byte DER issuer identity, the CRL signature,
+`thisUpdate`/`nextUpdate` freshness, path and permissions, and rejects
+symlinks, unexpected artifacts, and absent/malformed/replaced files. It
+**never opens the CA signing key**, builds the CA index, creates or renews a
+CRL, changes the trust store, or changes Nginx.
+
+**Even a cryptographically valid CRL does not prove the lost original
+CA issuance/revocation history.** The tool always reports
+`HISTORICAL_CA_ISSUANCE_AND_REVOCATION_LEDGER=NOT_VERIFIED`
+and `PRODUCTION_PKI_ACCEPTANCE=NOT_IMPLIED`.
+If the authoritative historical register cannot be reconstructed with
+evidence, do **not** treat `PASS` as permission to claim that old serials
+are unrevoked. Follow a separately approved CA/trust rollover instead.
+The actual production directory remains unchanged/HTTP 404 until that
+independent historical governance gate has passed.
+
 ## Public artifact filesystem access
 
 Only this **public artifact directory** must be traversable by the Nginx
