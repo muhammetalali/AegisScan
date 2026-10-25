@@ -68,19 +68,46 @@ def _pending_backup(backup_dir: Path) -> Path | None:
     return candidates[0]
 
 
+def _local_dump_failure_class(stderr: str | None) -> str:
+    """Classify a failed local dump without printing broker/DB secrets or SQL."""
+    message = (stderr or "").lower()
+    if "backup_pg_preflight=not_ready" in message:
+        return "postgres_not_ready"
+    if "connection refused" in message or "server closed the connection" in message:
+        return "postgres_connection_interrupted"
+    if "could not translate host name" in message or "could not resolve" in message:
+        return "postgres_dns_unavailable"
+    if "password authentication failed" in message or "no pg_hba.conf entry" in message:
+        return "postgres_authentication_failure"
+    if "no space left on device" in message:
+        return "local_storage_full"
+    if "permission denied" in message:
+        return "local_permissions_failure"
+    return "local_dump_unknown"
+
+
 def run_once() -> dict:
     backup_dir = Path(os.environ["AEGIS_BACKUP_DIR"]).resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
     source = _pending_backup(backup_dir)
     reused_pending = source is not None
     if source is None:
-        backup = subprocess.run(
-            ["sh", str(LOCAL_BACKUP)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_seconds("AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS", 7200, 60),
-        )
+        try:
+            backup = subprocess.run(
+                ["sh", str(LOCAL_BACKUP)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=_seconds("AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS", 7200, 60),
+            )
+        except subprocess.CalledProcessError as exc:
+            # subprocess captures stderr; raw pg_dump diagnostics can reveal
+            # schema or connection details, so emit only a bounded class.
+            category = _local_dump_failure_class(exc.stderr)
+            raise RuntimeError(
+                f"local PostgreSQL backup failed: phase=pg_dump "
+                f"class={category} exit={exc.returncode}"
+            ) from None
         lines = [line.strip() for line in backup.stdout.splitlines() if line.strip()]
         if not lines:
             raise RuntimeError("local backup script did not return a backup path")
