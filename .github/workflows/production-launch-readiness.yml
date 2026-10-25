@@ -39,6 +39,9 @@ on:
       - 'tests/test_production_alert_receiver.py'
       - 'tests/test_alertmanager_config.py'
       - 'tests/test_nginx_contract.py'
+      - 'aegis-platform/scripts/production_internal_pki_verify.py'
+      - 'aegis-platform/docker/pki-public/README.md'
+      - 'tests/test_internal_pki_publication.py'
       - 'tests/test_public_acceptance.py'
       - '.github/workflows/production-launch-readiness.yml'
       - '.github/workflows/production-live-deploy.yml'
@@ -124,6 +127,7 @@ jobs:
             tests/test_production_alert_receiver.py \
             tests/test_alertmanager_config.py \
             tests/test_nginx_contract.py \
+            tests/test_internal_pki_publication.py \
             tests/test_public_acceptance.py
       - name: Generate short-lived TLS proof material
         run: |
