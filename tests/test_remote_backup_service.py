@@ -99,3 +99,43 @@ def test_pending_backup_uses_oldest_verified_snapshot(tmp_path):
     os.utime(first, (1, 1))
     os.utime(second, (2, 2))
     assert service._pending_backup(tmp_path) == first.resolve()
+
+
+def test_backup_dump_preflight_wait_is_bounded_and_keeps_partial_cleanup():
+    text = (Path(__file__).parents[1] / "aegis-platform/scripts/backup_postgres.sh").read_text()
+    assert 'until pg_isready -q -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"' in text
+    assert '"$attempt" -ge 6' in text
+    assert "BACKUP_PG_PREFLIGHT=not_ready" in text
+    assert "trap 'rm -f " in text and "EXIT HUP INT TERM" in text
+
+
+def test_failed_local_dump_logs_safe_category_only(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    confidential = "postgresql://user:private-pw@host/aegisdb"
+
+    def local_failure(command, **_kwargs):
+        assert str(service.LOCAL_BACKUP) in command
+        raise subprocess.CalledProcessError(
+            1, command, stderr="pg_dump: connection refused: " + confidential
+        )
+
+    monkeypatch.setattr(service.subprocess, "run", local_failure)
+    with pytest.raises(RuntimeError) as result:
+        service.run_once()
+    assert "class=postgres_connection_interrupted" in str(result.value)
+    assert "exit=1" in str(result.value)
+    assert confidential not in str(result.value)
+    assert "private-pw" not in str(result.value)
+
+
+def test_backup_error_categories_do_not_return_raw_stderr():
+    cases = {
+        "BACKUP_PG_PREFLIGHT=not_ready": "postgres_not_ready",
+        "password authentication failed for user secret-account": "postgres_authentication_failure",
+        "No space left on device at /private/volume": "local_storage_full",
+        "ERROR confidential text": "local_dump_unknown",
+    }
+    for stderr, expected in cases.items():
+        assert service._local_dump_failure_class(stderr) == expected
+        assert "private" not in service._local_dump_failure_class(stderr)
+        assert "secret-account" not in service._local_dump_failure_class(stderr)
