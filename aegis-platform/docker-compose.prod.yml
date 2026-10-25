@@ -24,6 +24,7 @@ services:
     volumes:
       - ./docker/nginx-ssl.conf:/etc/nginx/nginx.conf:ro
       - ./docker/ssl:/etc/nginx/ssl:ro
+      - ./docker/pki-public:/etc/nginx/pki-public:ro
       - static_data:/usr/share/nginx/html/static:ro
       - media_data:/usr/share/nginx/html/media:ro
 

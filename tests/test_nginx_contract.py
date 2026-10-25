@@ -200,3 +200,41 @@ def test_real_gateway_dns_proof_accepts_only_version_pinned_mirror_images() -> N
             pass
         else:
             raise AssertionError(f"Unpinned or unapproved gateway image accepted: {invalid}")
+
+
+def test_g4_public_crl_is_the_only_http_revocation_exception() -> None:
+    """Prevent HTTPS-redirect recursion and accidental exposure of CA private files."""
+    root = Path(__file__).parents[1]
+    config = (root / "aegis-platform/docker/nginx-ssl.conf").read_text(encoding="utf-8")
+    server = next(block for block in _server_blocks(config) if "listen 80;" in block)
+    assert not re.search(r"(?m)^\s*return 301 https://\$host\$request_uri;", server.split("location / {")[0])
+    blocks = _location_blocks(server)
+    locations = {re.search(r"location\s+([^\s{]+(?:\s+[^\s{]+)?)\s*\{", b).group(1): b for b in blocks}
+    assert set(locations) == {
+        "= /pki/aegisscan-root-ca.crl",
+        "= /pki/aegisscan-root-ca.cer",
+        "/",
+    }
+    assert 'return 301 https://$host$request_uri;' in locations['/']
+    crl = locations['= /pki/aegisscan-root-ca.crl']
+    issuer = locations['= /pki/aegisscan-root-ca.cer']
+    assert 'alias /etc/nginx/pki-public/aegisscan-root-ca.crl;' in crl
+    assert 'default_type application/pkix-crl;' in crl
+    assert 'alias /etc/nginx/pki-public/aegisscan-root-ca.cer;' in issuer
+    assert 'default_type application/pkix-cert;' in issuer
+    for block in (crl, issuer):
+        assert 'limit_except GET { deny all; }' in block
+        assert 'types { }' in block
+        assert 'X-Content-Type-Options nosniff always;' in block
+        assert 'privkey.pem' not in block and 'root-ca.key' not in block
+    compose = (root / 'aegis-platform/docker-compose.prod.yml').read_text()
+    assert './docker/pki-public:/etc/nginx/pki-public:ro' in compose
+    assert (root / 'aegis-platform/docker/pki-public/.gitignore').is_file()
+
+def test_g4_public_readonly_artifact_permissions_are_documented() -> None:
+    root = Path(__file__).parents[1]
+    note = (root / 'aegis-platform/docker/pki-public/README.md').read_text()
+    assert '`0755`' in note and '`0644`' in note
+    assert '`0600`' in note
+    assert 'read-only' in note
+    assert 'without depending on' not in note or 'CRL' in note
