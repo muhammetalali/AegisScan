@@ -210,23 +210,27 @@ def test_g4_public_crl_is_the_only_http_revocation_exception() -> None:
     assert not re.search(r"(?m)^\s*return 301 https://\$host\$request_uri;", server.split("location / {")[0])
     blocks = _location_blocks(server)
     locations = {re.search(r"location\s+([^\s{]+(?:\s+[^\s{]+)?)\s*\{", b).group(1): b for b in blocks}
-    assert set(locations) == {
-        "= /pki/aegisscan-root-ca.crl",
-        "= /pki/aegisscan-root-ca.cer",
-        "/",
+    # Original root is unchanged. The successor can only use its separate,
+    # exact versioned public CDP/AIA URIs; no directory or key access.
+    approved = {
+        "= /pki/aegisscan-root-ca.crl": "/etc/nginx/pki-public/aegisscan-root-ca.crl",
+        "= /pki/aegisscan-root-ca.cer": "/etc/nginx/pki-public/aegisscan-root-ca.cer",
+        "= /pki/v2/aegisscan-root-ca.crl": "/etc/nginx/pki-public/v2/aegisscan-root-ca.crl",
+        "= /pki/v2/aegisscan-root-ca.cer": "/etc/nginx/pki-public/v2/aegisscan-root-ca.cer",
     }
-    assert 'return 301 https://$host$request_uri;' in locations['/']
-    crl = locations['= /pki/aegisscan-root-ca.crl']
-    issuer = locations['= /pki/aegisscan-root-ca.cer']
-    assert 'alias /etc/nginx/pki-public/aegisscan-root-ca.crl;' in crl
-    assert 'default_type application/pkix-crl;' in crl
-    assert 'alias /etc/nginx/pki-public/aegisscan-root-ca.cer;' in issuer
-    assert 'default_type application/pkix-cert;' in issuer
-    for block in (crl, issuer):
-        assert 'limit_except GET { deny all; }' in block
-        assert 'types { }' in block
-        assert 'X-Content-Type-Options nosniff always;' in block
-        assert 'privkey.pem' not in block and 'root-ca.key' not in block
+    assert set(locations) == set(approved) | {"/"}
+    assert 'return 301 https://$host$request_uri;' in locations["/"]
+    for name, alias in approved.items():
+        block = locations[name]
+        assert f"alias {alias};" in block
+        assert (
+            "default_type application/pkix-crl;" if name.endswith(".crl")
+            else "default_type application/pkix-cert;"
+        ) in block
+        assert "limit_except GET { deny all; }" in block
+        assert "types { }" in block
+        assert "X-Content-Type-Options nosniff always;" in block
+        assert "privkey.pem" not in block and "root-ca.key" not in block
     compose = (root / 'aegis-platform/docker-compose.prod.yml').read_text()
     assert './docker/pki-public:/etc/nginx/pki-public:ro' in compose
     assert (root / 'aegis-platform/docker/pki-public/.gitignore').is_file()

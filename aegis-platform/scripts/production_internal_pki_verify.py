@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -114,7 +115,7 @@ def verify_artifacts(
 
     root_der = _openssl("x509", "-in", str(root_pem), "-outform", "DER")
     if hashlib.sha256(root_der).hexdigest() != expected_root_sha256.lower().replace(":", ""):
-        raise ArtifactRejected("Trusted original root fingerprint does not match pinned CA")
+        raise ArtifactRejected("Trusted root fingerprint does not match the independently pinned CA")
     issuer_der = _openssl("x509", "-inform", "DER", "-in", str(cer), "-outform", "DER")
     if issuer_der != root_der or issuer_bytes != issuer_der:
         raise ArtifactRejected("Published DER issuer certificate differs from the trusted original root")
@@ -142,21 +143,46 @@ def verify_artifacts(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only G4 public PKI transport crypto preflight")
     default_public = Path(__file__).resolve().parents[1] / "docker" / "pki-public"
-    parser.add_argument("--public-dir", type=Path, default=default_public)
+    parser.add_argument("--profile", choices=("original", "successor"), default="original")
+    parser.add_argument("--public-dir", type=Path)
+    parser.add_argument("--root-cert", type=Path)
     parser.add_argument(
-        "--root-cert",
-        type=Path,
-        default=Path("/usr/local/share/ca-certificates/aegisscan-enterprise.crt"),
+        "--successor-root-sha256",
+        help="Independently authorized 64-character SHA-256 of the NEW public CA certificate",
     )
     args = parser.parse_args()
+    if args.profile == "original":
+        if args.successor_root_sha256 is not None:
+            parser.error("--successor-root-sha256 is forbidden for the original pinned CA")
+        public_dir = args.public_dir or default_public
+        root_cert = args.root_cert or Path("/usr/local/share/ca-certificates/aegisscan-enterprise.crt")
+        expected_sha256 = ORIGINAL_ROOT_FINGERPRINT
+    else:
+        # Never infer or auto-trust a successor from its presented certificate.
+        # The operator must separately approve and supply its public fingerprint.
+        if args.public_dir is None or args.root_cert is None:
+            parser.error("successor requires explicit --public-dir and --root-cert")
+        if not args.successor_root_sha256 or re.fullmatch(
+            r"[0-9a-fA-F]{64}", args.successor_root_sha256
+        ) is None:
+            parser.error("successor requires an independently verified 64-hex --successor-root-sha256")
+        expected_sha256 = args.successor_root_sha256.lower()
+        if expected_sha256 == ORIGINAL_ROOT_FINGERPRINT:
+            parser.error("successor must never reuse the original pinned CA identity")
+        public_dir = args.public_dir
+        root_cert = args.root_cert
+
     try:
-        findings = verify_artifacts(args.public_dir, args.root_cert)
+        findings = verify_artifacts(
+            public_dir, root_cert, expected_root_sha256=expected_sha256,
+        )
     except ArtifactRejected as exc:
         print("G4_PUBLIC_PKI_CRYPTO=NOT_READY", file=sys.stderr)
         print("G4_PUBLIC_PKI_REASON=" + str(exc), file=sys.stderr)
         print("G4_HISTORICAL_CA_LEDGER=NOT_VERIFIED", file=sys.stderr)
         return 3
     print("G4_PUBLIC_PKI_CRYPTO=PASS")
+    print("G4_PUBLIC_PKI_PROFILE=" + args.profile)
     for key, value in findings.items():
         print(f"{key.upper()}={value}")
     return 0
