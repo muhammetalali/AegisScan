@@ -320,9 +320,12 @@ acl "aegis_lan" {
 options {
     directory "/var/cache/bind";
 
+    # Listen only on loopback and the explicitly approved internal CIDR.
+    # BIND tracks DHCP address changes inside that trusted network itself;
+    # no legacy fixed service VIP or new scan authorization is inferred.
     listen-on {
         127.0.0.1;
-        $DNS_SERVICE_IP;
+        $INTERNAL_CIDR;
     };
 
     listen-on-v6 { none; };

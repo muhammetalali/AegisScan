@@ -61,6 +61,16 @@ def test_internal_dns_bootstrap_activates_and_verifies_address_before_bind_mutat
     assert script.index(bind_mutation) < script.index(bind_restart)
 
 
+def test_bind_dns_listener_tracks_trusted_cidr_not_stale_static_vip():
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    config = script.split('cat >/etc/bind/named.conf.options <<EOF\n', 1)[1].split('\nEOF\n', 1)[0]
+    assert 'listen-on {\n        127.0.0.1;\n        $INTERNAL_CIDR;\n    };' in config
+    assert '$DNS_SERVICE_IP;' not in config
+    assert 'allow-query { aegis_lan; };' in config
+    assert 'allow-recursion { aegis_lan; };' in config
+    assert 'allow-transfer { none; };' in config
+
+
 def test_internal_dns_bootstrap_fails_closed_on_tsig_split_brain_and_keeps_backups():
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
     assert 'tsig-keygen -a hmac-sha256 "$TSIG_NAME"' in script
