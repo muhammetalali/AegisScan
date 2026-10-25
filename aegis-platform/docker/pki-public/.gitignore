@@ -1,0 +1,4 @@
+# CA-signed revocation and issuer DER artifacts are generated off-repo.
+*
+!.gitignore
+!README.md
