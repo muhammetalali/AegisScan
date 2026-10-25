@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -265,6 +266,72 @@ class PublicPKIAdmission(unittest.TestCase):
         self.pub.chmod(0o700)
         with self.assertRaises(pki.ArtifactRejected):
             self.check()
+
+
+    def _run_cli(self, *args: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [
+                sys.executable, str(TOOL_PATH),
+                "--root-cert", str(self.cert),
+                "--public-dir", str(self.pub), *args,
+            ],
+            check=False, capture_output=True, timeout=25,
+        )
+
+    def test_successor_cli_requires_independent_pinning(self) -> None:
+        no_pin = self._run_cli("--profile", "successor")
+        self.assertEqual(no_pin.returncode, 2)
+        self.assertIn(b"independently verified", no_pin.stderr)
+
+        wrong = self._run_cli(
+            "--profile", "successor",
+            "--successor-root-sha256", "0" * 64,
+        )
+        self.assertEqual(wrong.returncode, 3)
+        self.assertIn(b"G4_PUBLIC_PKI_CRYPTO=NOT_READY", wrong.stderr)
+
+        original_fingerprint = self._run_cli(
+            "--profile", "successor",
+            "--successor-root-sha256", pki.ORIGINAL_ROOT_FINGERPRINT,
+        )
+        self.assertEqual(original_fingerprint.returncode, 2)
+        self.assertIn(b"never reuse", original_fingerprint.stderr)
+
+        correct = self._run_cli(
+            "--profile", "successor",
+            "--successor-root-sha256", self.root_fingerprint,
+        )
+        self.assertEqual(correct.returncode, 0, correct.stderr.decode(errors="replace"))
+        self.assertIn(b"G4_PUBLIC_PKI_PROFILE=successor", correct.stdout)
+        self.assertIn(b"PRODUCTION_PKI_ACCEPTANCE=NOT_IMPLIED", correct.stdout)
+        self.assertIn(b"HISTORICAL_CA_ISSUANCE_AND_REVOCATION_LEDGER=NOT_VERIFIED", correct.stdout)
+
+    def test_original_cli_must_remain_pinned(self) -> None:
+        old_override = self._run_cli("--successor-root-sha256", self.root_fingerprint)
+        self.assertEqual(old_override.returncode, 2)
+        self.assertIn(b"forbidden for the original", old_override.stderr)
+        old_fingerprint = self._run_cli()
+        self.assertEqual(old_fingerprint.returncode, 3)
+        self.assertIn(b"G4_PUBLIC_PKI_CRYPTO=NOT_READY", old_fingerprint.stderr)
+
+    def test_successor_public_http_paths_are_distinct_and_exact(self) -> None:
+        conf = (
+            Path(__file__).resolve().parents[1]
+            / "aegis-platform/docker/nginx-ssl.conf"
+        ).read_text()
+        for version in ("", "v2/"):
+            for suffix in ("crl", "cer"):
+                filename = f"aegisscan-root-ca.{suffix}"
+                self.assertIn(
+                    f"location = /pki/{version}{filename} {{",
+                    conf,
+                )
+                self.assertIn(
+                    f"alias /etc/nginx/pki-public/{version}{filename};",
+                    conf,
+                )
+        self.assertIn("limit_except GET { deny all; }", conf)
+        self.assertNotIn("location /pki/v2/", conf)  # no broad directory route
 
 
 if __name__ == "__main__":
