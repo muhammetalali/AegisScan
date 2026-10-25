@@ -230,3 +230,11 @@ def test_g4_public_crl_is_the_only_http_revocation_exception() -> None:
     compose = (root / 'aegis-platform/docker-compose.prod.yml').read_text()
     assert './docker/pki-public:/etc/nginx/pki-public:ro' in compose
     assert (root / 'aegis-platform/docker/pki-public/.gitignore').is_file()
+
+def test_g4_public_readonly_artifact_permissions_are_documented() -> None:
+    root = Path(__file__).parents[1]
+    note = (root / 'aegis-platform/docker/pki-public/README.md').read_text()
+    assert '`0755`' in note and '`0644`' in note
+    assert '`0600`' in note
+    assert 'read-only' in note
+    assert 'without depending on' not in note or 'CRL' in note

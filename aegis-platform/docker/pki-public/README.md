@@ -29,6 +29,14 @@ HTTPS as before.
 5. Accept unmodified Windows Schannel/Firefox HTTPS and controlled network
    failover before closing G4. No `-k`, revocation disablement or static IP.
 
+## Public artifact filesystem access
+
+Only this **public artifact directory** must be traversable by the Nginx
+worker (typically host directory `0755`, with approved DER files `0644`);
+a directory mode such as `0700` returns HTTP 403 even for correctly mapped
+files. Keep the volume read-only in Compose. The **issuer signing key remains
+in its separate root-only `0600` store** and must never be copied here.
+
 The signed public CRL and issuer certificate are intentionally ignored by
 Git and are not tracked as source. Publishing or rotating them is a separate
 root-controlled operational change with retention, rollback and audit proof.
