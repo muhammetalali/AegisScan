@@ -109,6 +109,7 @@ class PublicPKIAdmission(unittest.TestCase):
         """Regenerate a genuine signed CRL from the test CA database."""
         pem = self.root / "synthetic-updated.crl.pem"
         run("ca", "-gencrl", "-batch", "-config", str(self.ca_config), "-out", str(pem))
+        self.test_crl_pem = pem
         self.crl.write_bytes(run("crl", "-in", str(pem), "-outform", "DER"))
 
     def test_leaf_cdp_aia_good_then_revoked_is_rejected(self) -> None:
@@ -128,7 +129,7 @@ class PublicPKIAdmission(unittest.TestCase):
         good = subprocess.run(
             [
                 "openssl", "verify", "-purpose", "sslserver", "-crl_check",
-                "-CAfile", str(self.cert), "-CRLfile", str(self.crl), str(leaf),
+                "-CAfile", str(self.cert), "-CRLfile", str(self.test_crl_pem), str(leaf),
             ],
             capture_output=True, timeout=25, check=False,
         )
@@ -141,7 +142,7 @@ class PublicPKIAdmission(unittest.TestCase):
         revoked = subprocess.run(
             [
                 "openssl", "verify", "-purpose", "sslserver", "-crl_check",
-                "-CAfile", str(self.cert), "-CRLfile", str(self.crl), str(leaf),
+                "-CAfile", str(self.cert), "-CRLfile", str(self.test_crl_pem), str(leaf),
             ],
             capture_output=True, timeout=25, check=False,
         )
