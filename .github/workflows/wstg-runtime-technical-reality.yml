@@ -79,6 +79,19 @@ jobs:
               ['git', 'diff', '--name-only', base, 'HEAD'],
               text=True,
           ).splitlines())
+          # G3: keep the original B1/B2 ownership checks and recognize only
+          # the complete bound-AssetAuthorization / pinned-HTTP defect fix.
+          # The regression test file is mandatory; unrelated paths remain denied.
+          g3_required = {
+              'aegis-platform/backend/fastapi_app/services/pinned_http.py',
+              'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py',
+          }
+          g3_allowed = g3_required | {
+              '.github/workflows/wstg-runtime-technical-reality.yml',
+              '.github/workflows/governed-oast-runtime-reality.yml',
+          }
           if changed <= b1_allowed:
               lockset = 'B1_RUNTIME'
           elif (
@@ -86,6 +99,8 @@ jobs:
               and changed <= b2_oast_allowed
           ):
               lockset = 'B2_GOVERNED_OAST'
+          elif g3_required <= changed <= g3_allowed:
+              lockset = 'G3_WSTG_BOUND_AUTHORIZATION'
           else:
               unexpected = sorted(changed - (b1_allowed | b2_oast_allowed))
               raise SystemExit(

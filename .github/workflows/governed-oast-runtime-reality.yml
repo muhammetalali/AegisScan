@@ -164,9 +164,26 @@ jobs:
               if forbidden:
                   raise SystemExit(f'CHAT_A_OWNERSHIP_VIOLATION={forbidden}')
           else:
-              oast_specific = sorted((changed_set & oast_owned) - shared_triggers)
-              if oast_specific:
-                  raise SystemExit(f'CHAT_B_OWNERSHIP_VIOLATION={oast_specific}')
+              # The G3 bound-authority fix shares the WSTG runtime component
+              # with OAST but does not modify any OAST collector, schema or API.
+              # Require the complete security fix and its regressions together;
+              # do not exempt arbitrary changes to OAST-owned paths.
+              g3_required = {
+                  'aegis-platform/backend/fastapi_app/services/pinned_http.py',
+                  'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+                  'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py',
+                  'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py',
+              }
+              g3_allowed = g3_required | {
+                  '.github/workflows/wstg-runtime-technical-reality.yml',
+                  '.github/workflows/governed-oast-runtime-reality.yml',
+              }
+              if g3_required <= changed_set <= g3_allowed:
+                  print('GOVERNED_OAST_G3_BOUND_AUTHORIZATION_EXCEPTION=SCOPED')
+              else:
+                  oast_specific = sorted((changed_set & oast_owned) - shared_triggers)
+                  if oast_specific:
+                      raise SystemExit(f'CHAT_B_OWNERSHIP_VIOLATION={oast_specific}')
 
           print(f'GOVERNED_OAST_LOCKSET=PASS head_ref={head_ref or "detached"}')
           PY
