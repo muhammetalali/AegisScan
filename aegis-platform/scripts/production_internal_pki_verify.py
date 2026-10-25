@@ -37,6 +37,34 @@ def _openssl(*args: str) -> bytes:
         raise ArtifactRejected("OpenSSL certificate/CRL verification failed") from exc
 
 
+def _verify_signed_crl(crl: Path, root_pem: Path) -> None:
+    """Require explicit OpenSSL success, never just its exit status.
+
+    OpenSSL releases differ in whether CRL signature checking exits nonzero
+    after reporting "verify failure". An exit-zero response without
+    the exact success marker is not cryptographic verification.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "openssl", "crl", "-inform", "DER", "-in", str(crl),
+                "-CAfile", str(root_pem), "-verify", "-noout",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise ArtifactRejected("OpenSSL CRL signature verification unavailable") from exc
+
+    # Treat any extra diagnostics (including a misleading verification
+    # failure alongside an OK line) as a failure. Accept stdout or stderr.
+    verdict = (result.stdout + b"\n" + result.stderr).strip()
+    if result.returncode != 0 or verdict != b"verify OK":
+        raise ArtifactRejected("CRL signature verification did not return explicit verify OK")
+
+
 def _public_file(path: Path, *, limit: int) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ArtifactRejected("Required public artifact missing or is a symlink")
@@ -92,7 +120,7 @@ def verify_artifacts(
         raise ArtifactRejected("Published DER issuer certificate differs from the trusted original root")
 
     _openssl("x509", "-in", str(root_pem), "-checkend", "0", "-noout")
-    _openssl("crl", "-inform", "DER", "-in", str(crl), "-CAfile", str(root_pem), "-verify", "-noout")
+    _verify_signed_crl(crl, root_pem)
     dates = _openssl("crl", "-inform", "DER", "-in", str(crl), "-noout", "-lastupdate", "-nextupdate").decode()
     last = _asn1_time(dates, "lastUpdate")
     future = _asn1_time(dates, "nextUpdate")

@@ -88,10 +88,65 @@ class PublicPKIAdmission(unittest.TestCase):
 
     def test_tampered_crl_rejected(self) -> None:
         b = bytearray(self.crl.read_bytes())
-        b[len(b) // 2] ^= 0x01
+        b[-1] ^= 0x01  # The DER CRL ends in the signed BIT STRING.
         self.crl.write_bytes(b)
         with self.assertRaises(pki.ArtifactRejected):
             self.check()
+
+    def test_openssl_zero_exit_with_verify_failure_is_rejected(self) -> None:
+        """Some OpenSSL CLI builds can return 0 despite 'verify failure'."""
+        from unittest.mock import patch
+
+        fake = subprocess.CompletedProcess(
+            args=["openssl", "crl"], returncode=0,
+            stdout=b"", stderr=b"verify failure\n",
+        )
+        with patch.object(pki.subprocess, "run", return_value=fake):
+            with self.assertRaises(pki.ArtifactRejected):
+                pki._verify_signed_crl(self.crl, self.cert)
+
+    def test_openssl_zero_exit_without_explicit_verify_ok_rejected(self) -> None:
+        from unittest.mock import patch
+
+        fake = subprocess.CompletedProcess(
+            args=["openssl", "crl"], returncode=0,
+            stdout=b"", stderr=b"",
+        )
+        with patch.object(pki.subprocess, "run", return_value=fake):
+            with self.assertRaises(pki.ArtifactRejected):
+                pki._verify_signed_crl(self.crl, self.cert)
+
+    def test_openssl_explicit_verify_ok_is_accepted(self) -> None:
+        from unittest.mock import patch
+
+        fake = subprocess.CompletedProcess(
+            args=["openssl", "crl"], returncode=0,
+            stdout=b"", stderr=b"verify OK\n",
+        )
+        with patch.object(pki.subprocess, "run", return_value=fake):
+            pki._verify_signed_crl(self.crl, self.cert)
+
+    def test_nonzero_exit_with_verify_ok_text_rejected(self) -> None:
+        from unittest.mock import patch
+
+        fake = subprocess.CompletedProcess(
+            args=["openssl", "crl"], returncode=1,
+            stdout=b"", stderr=b"verify OK\n",
+        )
+        with patch.object(pki.subprocess, "run", return_value=fake):
+            with self.assertRaises(pki.ArtifactRejected):
+                pki._verify_signed_crl(self.crl, self.cert)
+
+    def test_conflicting_output_with_verify_ok_rejected(self) -> None:
+        from unittest.mock import patch
+
+        fake = subprocess.CompletedProcess(
+            args=["openssl", "crl"], returncode=0,
+            stdout=b"verify failure\n", stderr=b"verify OK\n",
+        )
+        with patch.object(pki.subprocess, "run", return_value=fake):
+            with self.assertRaises(pki.ArtifactRejected):
+                pki._verify_signed_crl(self.crl, self.cert)
 
     def test_replaced_root_issuer_rejected(self) -> None:
         p = self.pub / "aegisscan-root-ca.cer"
