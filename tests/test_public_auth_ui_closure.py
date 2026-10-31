@@ -20,10 +20,14 @@ def test_signin_links_to_safe_access_assistance():
     assert "Need help accessing your account?" in login
 
 
-def test_register_no_longer_links_to_nonexistent_legal_routes():
+def test_register_enforces_owner_managed_accounts_without_public_signup():
     register = (PAGES / "Register.tsx").read_text(encoding="utf-8")
     assert 'to="/terms"' not in register
     assert 'to="/privacy"' not in register
-    assert "اطلب معلومات شروط الاستخدام والخصوصية" in register
+    assert "حسابات AegisScan للشركة فقط" in register
+    assert "لا يوجد تسجيل عام ولا تفعيل عبر البريد الإلكتروني" in register
+    assert "Public registration and email activation are disabled" in register
+    assert '<Link to="/login"' in register
+    assert "<form" not in register
+    assert "apiHelpers.post" not in register
     assert "2FA متاح" not in register
-    assert "جلسة محمية" in register
