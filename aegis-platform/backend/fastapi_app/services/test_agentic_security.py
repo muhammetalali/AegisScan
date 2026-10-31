@@ -1,3 +1,4 @@
+import json
 from __future__ import annotations
 
 import pytest
@@ -353,4 +354,72 @@ def test_agentic_idempotency_conflict_is_fail_closed(disposition_fixture):
             profile,
             'same-idem',
             prompt_sha256='9' * 64,
+        )
+
+
+
+def test_local_lmstudio_endpoint_requires_private_config(monkeypatch):
+    from fastapi_app.services.agentic_security import _local_model_settings, LocalModelPlanningError
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_MODEL', 'aegisscan-planner')
+    base, model, token = _local_model_settings()
+    assert (base, model) == ('http://192.168.49.1:1234', 'aegisscan-planner')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://example.com:1234')
+    with pytest.raises(LocalModelPlanningError):
+        _local_model_settings()
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://8.8.8.8:1234')
+    with pytest.raises(LocalModelPlanningError):
+        _local_model_settings()
+
+
+@pytest.mark.asyncio
+async def test_local_lmstudio_plan_filters_unavailable_and_unrecognized_capabilities(monkeypatch):
+    import httpx
+    from fastapi_app.services.agentic_security import propose_local_model_task_plan
+
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_MODEL', 'aegisscan-planner')
+    client_class = httpx.AsyncClient
+    observed = []
+    async def respond(request):
+        observed.append(request)
+        return httpx.Response(200, json={
+            'output': [{'type': 'message', 'content': (
+                '{"checks":["web.security-headers","burp.mcp.gateway","system.shell"],'
+                '"requires_credentials":true,"notes":"No verified access."}'
+            )}],
+        })
+    def fake_client(*args, **kwargs):
+        return client_class(transport=httpx.MockTransport(respond), **kwargs)
+    monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
+    result = await propose_local_model_task_plan(
+        target='https://challenge.cyberpedia.site',
+        objective='Review the authorized login and OTP challenge without credential guessing.',
+        capability_readiness={'web.security-headers': True, 'burp.mcp.gateway': False},
+    )
+    assert result['suggested_capabilities'] == ['web.security-headers']
+    assert result['unavailable_capabilities'] == ['burp.mcp.gateway']
+    assert result['discarded_unsupported_count'] == 1
+    assert result['requires_credentials'] is True
+    assert result['execution_started'] is False
+    assert result['verified_success'] is False
+    assert len(observed) == 1
+    assert observed[0].url.path == '/api/v1/chat'
+    body = json.loads(observed[0].content)
+    assert body['reasoning'] == 'off'
+    assert body['store'] is False
+    assert 'integrations' not in body
+
+
+@pytest.mark.asyncio
+async def test_local_lmstudio_rejects_sensitive_prompts_before_call(monkeypatch):
+    from fastapi_app.services.agentic_security import (
+        LocalModelPlanningError, propose_local_model_task_plan,
+    )
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    with pytest.raises(LocalModelPlanningError, match='credentials'):
+        await propose_local_model_task_plan(
+            target='https://challenge.cyberpedia.site',
+            objective='Use password=not-a-real-secret-value to authenticate and scan.',
+            capability_readiness={'web.security-headers': True},
         )
