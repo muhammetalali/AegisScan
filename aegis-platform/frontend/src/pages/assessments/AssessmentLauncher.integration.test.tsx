@@ -67,4 +67,17 @@ describe('single target input selects existing assessment mode and respects gran
     await waitFor(()=>expect(toast.error).toHaveBeenCalledWith('This target type is not enabled for your account.'))
     expect(post).not.toHaveBeenCalled()
   })
+  it('registers an authorized URL without dispatching any scan when prepare-only is selected',async()=>{
+    renderLauncher()
+    await screen.findByRole('heading', { name: /Start a new assessment|بدء فحص جديد/ })
+    fireEvent.click(screen.getByText(/URL \/ Domain|رابط أو اسم نطاق/))
+    fireEvent.change(screen.getByPlaceholderText('https://app.example.com'),{target:{value:'https://challenge.cyberpedia.site'}})
+    fireEvent.click(screen.getByText('Prepare target only (no scans)'))
+    await waitFor(()=>expect(post).toHaveBeenCalledWith('/assessment-launcher/prepare',{
+      project_id:'project-1',mode:'url',target:'https://challenge.cyberpedia.site',depth:'standard',
+    }))
+    await waitFor(()=>expect(navigate).toHaveBeenCalledWith('/assets'))
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
 })
