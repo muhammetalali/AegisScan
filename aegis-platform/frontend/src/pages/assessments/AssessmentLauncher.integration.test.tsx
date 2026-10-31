@@ -67,4 +67,21 @@ describe('single target input selects existing assessment mode and respects gran
     await waitFor(()=>expect(toast.error).toHaveBeenCalledWith('This target type is not enabled for your account.'))
     expect(post).not.toHaveBeenCalled()
   })
+  it('shows project-scoped Burp metadata without claiming runtime execution',async()=>{
+    get.mockImplementation(async(path:string)=>{
+      if(path==='/projects/project-1/')return {id:'project-1',name:'Authorized lab'} as never
+      if(path==='/assessment-launcher/context')return {
+        ...context(['url']),integrations:{burp_mcp:{provider_state:'missing',decision_ref:null,
+          declared_operations:[],runtime_verified:false,available_lab_definitions:['bac-orders-v1']}}
+      } as never
+      throw Error('Unknown '+path)
+    })
+    renderLauncher()
+    await screen.findByRole('heading',{name:/Start a new assessment|بدء فحص جديد/})
+    const box=await screen.findByLabelText('Burp integration readiness')
+    expect(box.textContent).toContain('not configured in this project')
+    expect(box.textContent).toContain('Runtime: not verified')
+    expect(post).not.toHaveBeenCalled()
+  })
+
 })
