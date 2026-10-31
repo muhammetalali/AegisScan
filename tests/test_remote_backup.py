@@ -16,6 +16,8 @@ class FakeS3:
         self.objects = {}
         self.versioning = "Enabled"
         self.counter = 0
+        self.upload_config = None
+        self.upload_args = None
 
     def _next_version(self):
         self.counter += 1
@@ -24,7 +26,10 @@ class FakeS3:
         return {}
     def get_bucket_versioning(self, **kwargs):
         return {"Status": self.versioning}
-    def upload_file(self, filename, bucket, key, ExtraArgs=None):
+    def upload_file(self, filename, bucket, key, ExtraArgs=None, Config=None):
+        self.upload_config = Config
+        self.upload_args = ExtraArgs
+        assert Config is not None and Path(filename).stat().st_size < Config.multipart_threshold
         self.objects[(bucket, key)] = {
             "body": Path(filename).read_bytes(),
             "metadata": dict((ExtraArgs or {}).get("Metadata", {})),
@@ -82,6 +87,8 @@ def test_remote_round_trip_survives_local_loss(tmp_path, monkeypatch):
     monkeypatch.setattr(remote, "_s3_client", lambda _args: store)
     pushed = remote._push(make_args(tmp_path, key, credentials, source=str(source)))
     encrypted = store.objects[("aegis-backups", pushed["object_key"])]["body"]
+    assert store.upload_config.multipart_threshold == remote.MAX_SINGLE_PUT_BYTES
+    assert store.upload_args["ChecksumSHA256"]
     assert pushed["status"] == "committed"
     assert pushed["object_version_id"].startswith("v")
     assert pushed["manifest_version_id"].startswith("v")
@@ -199,3 +206,12 @@ def test_restore_refuses_to_overwrite_existing_output(tmp_path, monkeypatch):
 def test_http_test_override_rejects_metadata_and_special_networks(endpoint):
     with pytest.raises(remote.BackupError, match="loopback test stores"):
         remote._validate_endpoint(endpoint, allow_http=True)
+
+def test_encrypted_backup_over_single_put_limit_fails_closed(tmp_path, monkeypatch):
+    source, _, key, credentials, _ = fixture_files(tmp_path)
+    store = FakeS3()
+    monkeypatch.setattr(remote, "_s3_client", lambda _args: store)
+    monkeypatch.setattr(remote, "MAX_SINGLE_PUT_BYTES", 1024)
+    with pytest.raises(remote.BackupError, match="exceeds single-PUT"):
+        remote._push(make_args(tmp_path, key, credentials, source=str(source)))
+    assert store.objects == {}
