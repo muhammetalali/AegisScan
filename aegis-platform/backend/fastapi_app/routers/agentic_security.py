@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
+from django_project.assets.models import Asset
 from enterprise.agentic_security_models import AgenticActionDecision, AgenticSecurityProfile
 
 from ..core.dependencies import get_current_user, project_access_q
@@ -17,6 +18,8 @@ from ..services.agentic_security import (
     AgenticSecurityError,
     authorize_agentic_action,
     register_agentic_profile,
+    LocalModelPlanningError,
+    propose_local_model_task_plan,
 )
 
 
@@ -206,3 +209,59 @@ async def list_agentic_actions(
         .order_by('-created_at', '-id')[:limit]
     ))()
     return [_serialize_action(row) for row in rows]
+
+
+class LocalModelTaskIn(BaseModel):
+    """A task objective, never an arbitrary command or model-supplied URL."""
+    model_config = ConfigDict(extra='forbid')
+    asset_id: UUID
+    objective: str = Field(min_length=10, max_length=1400)
+
+
+@sync_to_async
+def _authorized_model_asset(project_id: str, asset_id: str):
+    from ..services.authorization_guard import current_asset_authorization, asset_target
+
+    asset = Asset.objects.filter(
+        pk=asset_id, project_id=project_id, is_active=True,
+    ).first()
+    if asset is None:
+        return None
+    decision, _reason = current_asset_authorization(asset)
+    if not decision or (asset.configuration or {}).get('authorized') is not True:
+        return None
+    return asset_target(asset), asset.type
+
+
+@router.post('/projects/{project_id}/local-model/plan')
+async def plan_authorized_task_with_local_model(
+    project_id: UUID,
+    payload: LocalModelTaskIn,
+    user=Depends(get_current_user),
+):
+    """Read-only model planning: never dispatches scans or native Burp calls."""
+    from ..services.capability_planner import plan_capabilities
+
+    actor = _actor_id(user)
+    if not await _project_access(str(project_id), actor):
+        raise HTTPException(status_code=404, detail='Project is not accessible.')
+    asset = await _authorized_model_asset(str(project_id), str(payload.asset_id))
+    if asset is None:
+        raise HTTPException(status_code=409, detail='Asset authorization is missing or no longer current.')
+    target, asset_type = asset
+    capabilities = {
+        row.capability_id: row.execution_ready
+        for row in plan_capabilities(asset_type, 'quick')
+    }
+    try:
+        proposal = await propose_local_model_task_plan(
+            target=target,
+            objective=payload.objective,
+            capability_readiness=capabilities,
+        )
+    except LocalModelPlanningError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        'project_id': str(project_id), 'asset_id': str(payload.asset_id),
+        'target': target, **proposal,
+    }

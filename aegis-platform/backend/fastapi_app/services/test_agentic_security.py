@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from django.core.exceptions import ValidationError
 
@@ -354,3 +356,123 @@ def test_agentic_idempotency_conflict_is_fail_closed(disposition_fixture):
             'same-idem',
             prompt_sha256='9' * 64,
         )
+
+
+
+def test_local_lmstudio_endpoint_requires_private_config(monkeypatch):
+    from fastapi_app.services.agentic_security import _local_model_settings, LocalModelPlanningError
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_MODEL', 'aegisscan-planner')
+    base, model, token = _local_model_settings()
+    assert (base, model) == ('http://192.168.49.1:1234', 'aegisscan-planner')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://example.com:1234')
+    with pytest.raises(LocalModelPlanningError):
+        _local_model_settings()
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://8.8.8.8:1234')
+    with pytest.raises(LocalModelPlanningError):
+        _local_model_settings()
+
+
+@pytest.mark.asyncio
+async def test_local_lmstudio_plan_filters_unavailable_and_unrecognized_capabilities(monkeypatch):
+    import httpx
+    from fastapi_app.services.agentic_security import propose_local_model_task_plan
+
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    monkeypatch.setenv('AEGIS_LM_STUDIO_MODEL', 'aegisscan-planner')
+    client_class = httpx.AsyncClient
+    observed = []
+    async def respond(request):
+        observed.append(request)
+        return httpx.Response(200, json={
+            'output': [{'type': 'message', 'content': (
+                '{"checks":["web.security-headers","burp.mcp.gateway","system.shell"],'
+                '"requires_credentials":true,"notes":"No verified access."}'
+            )}],
+        })
+    def fake_client(*args, **kwargs):
+        return client_class(transport=httpx.MockTransport(respond), **kwargs)
+    monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
+    result = await propose_local_model_task_plan(
+        target='https://challenge.cyberpedia.site',
+        objective='Review the authorized login and OTP challenge without credential guessing.',
+        capability_readiness={'web.security-headers': True, 'burp.mcp.gateway': False},
+    )
+    assert result['suggested_capabilities'] == ['web.security-headers']
+    assert result['unavailable_capabilities'] == ['burp.mcp.gateway']
+    assert result['discarded_unsupported_count'] == 1
+    assert result['requires_credentials'] is True
+    assert result['execution_started'] is False
+    assert result['verified_success'] is False
+    assert len(observed) == 1
+    assert observed[0].url.path == '/api/v1/chat'
+    body = json.loads(observed[0].content)
+    assert body['reasoning'] == 'off'
+    assert body['store'] is False
+    assert 'integrations' not in body
+
+
+@pytest.mark.asyncio
+async def test_local_lmstudio_rejects_sensitive_prompts_before_call(monkeypatch):
+    from fastapi_app.services.agentic_security import (
+        LocalModelPlanningError, propose_local_model_task_plan,
+    )
+    monkeypatch.setenv('AEGIS_LM_STUDIO_BASE_URL', 'http://192.168.49.1:1234')
+    with pytest.raises(LocalModelPlanningError, match='credentials'):
+        await propose_local_model_task_plan(
+            target='https://challenge.cyberpedia.site',
+            objective='Use password=not-a-real-secret-value to authenticate and scan.',
+            capability_readiness={'web.security-headers': True},
+        )
+
+
+
+@pytest.mark.asyncio
+async def test_local_model_plan_route_authorization_boundaries(monkeypatch):
+    from uuid import uuid4
+    from fastapi import HTTPException
+    from fastapi_app.routers import agentic_security as router
+
+    pid, aid, uid = uuid4(), uuid4(), uuid4()
+    form = router.LocalModelTaskIn(
+        asset_id=aid,
+        objective='Review standard response headers and session expiration in a training lab.',
+    )
+
+    async def project_allowed(*_args, **_kwargs):
+        return True
+
+    async def project_denied(*_args, **_kwargs):
+        return False
+
+    async def authorized_asset(*_args, **_kwargs):
+        return 'https://sample.invalid', 'website'
+
+    async def missing_asset(*_args, **_kwargs):
+        return None
+
+    async def proposal(**kwargs):
+        assert kwargs['target'] == 'https://sample.invalid'
+        return {'state': 'proposed_only', 'execution_started': False,
+                'verified_success': False, 'suggested_capabilities': []}
+
+    monkeypatch.setattr(router, '_project_access', project_allowed)
+    monkeypatch.setattr(router, '_authorized_model_asset', authorized_asset)
+    monkeypatch.setattr(router, 'propose_local_model_task_plan', proposal)
+    result = await router.plan_authorized_task_with_local_model(
+        pid, form, user={'id': str(uid)},
+    )
+    assert result['asset_id'] == str(aid)
+    assert result['state'] == 'proposed_only'
+    assert result['execution_started'] is False
+
+    monkeypatch.setattr(router, '_project_access', project_denied)
+    with pytest.raises(HTTPException) as inaccessible:
+        await router.plan_authorized_task_with_local_model(pid, form, user={'id': str(uid)})
+    assert inaccessible.value.status_code == 404
+
+    monkeypatch.setattr(router, '_project_access', project_allowed)
+    monkeypatch.setattr(router, '_authorized_model_asset', missing_asset)
+    with pytest.raises(HTTPException) as unbound:
+        await router.plan_authorized_task_with_local_model(pid, form, user={'id': str(uid)})
+    assert unbound.value.status_code == 409

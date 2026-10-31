@@ -620,3 +620,115 @@ def authorize_agentic_action(
         },
     )
     return AgenticActionResult(decision=row, replayed=False)
+
+
+# Inference-only model adapter. Action execution remains with governed AegisScan services.
+class LocalModelPlanningError(AgenticSecurityError):
+    pass
+
+
+def _local_model_settings() -> tuple[str, str, str]:
+    """The endpoint is operator-configured and must be a private IP literal."""
+    import ipaddress
+    import os
+    from urllib.parse import urlsplit
+
+    raw = os.getenv('AEGIS_LM_STUDIO_BASE_URL', '').strip().rstrip('/')
+    model = os.getenv('AEGIS_LM_STUDIO_MODEL', 'aegisscan-planner').strip()
+    if not raw:
+        raise LocalModelPlanningError('LM Studio endpoint is not configured on this server.')
+    try:
+        url = urlsplit(raw)
+        ip = ipaddress.ip_address(url.hostname or '')
+        if (url.scheme != 'http' or not (ip.is_private or ip.is_loopback)
+                or url.port != 1234 or url.username or url.password
+                or url.path not in ('', '/') or url.query or url.fragment):
+            raise ValueError('invalid endpoint')
+    except ValueError as exc:
+        raise LocalModelPlanningError('LM Studio requires a private IP literal and port 1234.') from exc
+    if not model or len(model) > 180 or any(c.isspace() for c in model):
+        raise LocalModelPlanningError('Invalid model identifier.')
+    return raw, model, os.getenv('AEGIS_LM_STUDIO_API_TOKEN', '')
+
+
+async def propose_local_model_task_plan(
+    *, target: str, objective: str, capability_readiness: dict[str, bool]
+) -> dict[str, Any]:
+    """One bounded model inference; never calls tools, processes or scan endpoints."""
+    import httpx
+    import time
+
+    if not 10 <= len(objective) <= 1400:
+        raise LocalModelPlanningError('Task description must be 10 to 1400 characters.')
+    if re.search(r'(?i)(authorization\s*:\s*bearer|cookie\s*:|password\s*[:=]|api[_-]?key\s*[:=]|'
+                 r'eyJ[A-Za-z0-9_-]{24,}\.)', objective):
+        raise LocalModelPlanningError('Do not submit credentials, cookies or tokens to the model.')
+    if not capability_readiness or len(capability_readiness) > 64:
+        raise LocalModelPlanningError('There are no bounded capabilities for this asset.')
+    base, model, token = _local_model_settings()
+    offered = sorted(capability_readiness)
+    system_prompt = (
+        'You are an inference-only security planner inside AegisScan. '
+        'Return JSON with checks (array of up to 5 exact capability IDs), '
+        'requires_credentials (boolean), and notes (string, max 300 chars). '
+        'Choose only supplied IDs. Never assert scan completion, compromise, '
+        'evidence, or authorization. No shells, external URLs, password guessing, '
+        'infrastructure attacks or DoS. You cannot invoke tools.'
+    )
+    prompt = (
+        f'Authorized asset: {target}\nTask: {objective}\n'
+        f'Available capability IDs: {", ".join(offered)}\n'
+        'Return compact JSON only.'
+    )
+    headers = {'Authorization': f'Bearer {token}'} if token else {}
+    began = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=25.0, trust_env=False, follow_redirects=False) as client:
+            response = await client.post(
+                base + '/api/v1/chat', headers=headers,
+                json={'model': model, 'system_prompt': system_prompt, 'input': prompt,
+                      'reasoning': 'off', 'max_output_tokens': 400,
+                      'temperature': 0, 'stream': False, 'store': False},
+            )
+            response.raise_for_status()
+            result = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise LocalModelPlanningError('LM Studio did not return a valid response.') from exc
+
+    output = result.get('output', [])
+    if not isinstance(output, list) or any(
+        isinstance(part, dict) and part.get('type') == 'tool_call' for part in output
+    ):
+        raise LocalModelPlanningError('The model must return text, not tool calls.')
+    content = '\n'.join(
+        part.get('content', '') for part in output
+        if isinstance(part, dict) and part.get('type') == 'message'
+        and isinstance(part.get('content'), str)
+    ).strip()
+    if content.startswith(chr(96) * 3):
+        content = re.sub(r'^\x60{3}(?:json)?\s*|\s*\x60{3}$', '', content).strip()
+    if not content or len(content) > 5000:
+        raise LocalModelPlanningError('Model output was empty or excessive.')
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError) as exc:
+        raise LocalModelPlanningError('Invalid JSON proposal; no actions were started.') from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get('checks'), list):
+        raise LocalModelPlanningError('Model output did not match the plan contract.')
+    raw = parsed['checks']
+    if len(raw) > 5 or any(not isinstance(cap, str) for cap in raw):
+        raise LocalModelPlanningError('Malformed or excessive model steps.')
+    proposed = list(dict.fromkeys(raw))
+    valid = [cap for cap in proposed if cap in capability_readiness and capability_readiness[cap]]
+    blocked = [cap for cap in proposed if cap in capability_readiness and not capability_readiness[cap]]
+    notes = parsed.get('notes', '')
+    return {
+        'state': 'proposed_only', 'model': model,
+        'suggested_capabilities': valid, 'unavailable_capabilities': blocked,
+        'discarded_unsupported_count': sum(cap not in capability_readiness for cap in proposed),
+        'requires_credentials': parsed.get('requires_credentials') is True,
+        'notes': notes[:300] if isinstance(notes, str) else '',
+        'execution_started': False, 'verified_success': False,
+        'elapsed_ms': round((time.monotonic() - began) * 1000),
+        'task_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+    }
