@@ -416,6 +416,21 @@ def _suggest_authorized_networks() -> list[str]:
     return list(dict.fromkeys(result))
 
 
+def _task_provider_readiness(project_id: str) -> dict:
+    """Read-only, tenant-scoped Burp metadata; never infer runtime readiness from registration."""
+    from ..services.web_labs_preparation import _provider_metadata, DEFINITION_PATH
+    provider, operations = _provider_metadata(project_id)
+    return {
+        'burp_mcp': {
+            'provider_state': provider['state'],
+            'decision_ref': provider.get('decision_ref'),
+            'declared_operations': operations,
+            'runtime_verified': False,
+            'available_lab_definitions': [DEFINITION_PATH.stem],
+        },
+    }
+
+
 @router.get('/context')
 async def assessment_context(project_id: str, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
@@ -434,6 +449,7 @@ async def assessment_context(project_id: str, user=Depends(get_current_user)):
         'default_depth': 'standard',
         'scope_mode': _scope_mode(),
         'automatic_scope_activation': _scope_mode() == 'single-operator-lab',
+        'integrations': await sync_to_async(_task_provider_readiness)(project_id),
     }
 
 
