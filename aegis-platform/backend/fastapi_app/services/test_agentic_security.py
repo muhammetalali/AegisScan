@@ -424,3 +424,55 @@ async def test_local_lmstudio_rejects_sensitive_prompts_before_call(monkeypatch)
             objective='Use password=not-a-real-secret-value to authenticate and scan.',
             capability_readiness={'web.security-headers': True},
         )
+
+
+
+@pytest.mark.asyncio
+async def test_local_model_plan_route_authorization_boundaries(monkeypatch):
+    from uuid import uuid4
+    from fastapi import HTTPException
+    from fastapi_app.routers import agentic_security as router
+
+    pid, aid, uid = uuid4(), uuid4(), uuid4()
+    form = router.LocalModelTaskIn(
+        asset_id=aid,
+        objective='Review standard response headers and session expiration in a training lab.',
+    )
+
+    async def project_allowed(*_args, **_kwargs):
+        return True
+
+    async def project_denied(*_args, **_kwargs):
+        return False
+
+    async def authorized_asset(*_args, **_kwargs):
+        return 'https://sample.invalid', 'website'
+
+    async def missing_asset(*_args, **_kwargs):
+        return None
+
+    async def proposal(**kwargs):
+        assert kwargs['target'] == 'https://sample.invalid'
+        return {'state': 'proposed_only', 'execution_started': False,
+                'verified_success': False, 'suggested_capabilities': []}
+
+    monkeypatch.setattr(router, '_project_access', project_allowed)
+    monkeypatch.setattr(router, '_authorized_model_asset', authorized_asset)
+    monkeypatch.setattr(router, 'propose_local_model_task_plan', proposal)
+    result = await router.plan_authorized_task_with_local_model(
+        pid, form, user={'id': str(uid)},
+    )
+    assert result['asset_id'] == str(aid)
+    assert result['state'] == 'proposed_only'
+    assert result['execution_started'] is False
+
+    monkeypatch.setattr(router, '_project_access', project_denied)
+    with pytest.raises(HTTPException) as inaccessible:
+        await router.plan_authorized_task_with_local_model(pid, form, user={'id': str(uid)})
+    assert inaccessible.value.status_code == 404
+
+    monkeypatch.setattr(router, '_project_access', project_allowed)
+    monkeypatch.setattr(router, '_authorized_model_asset', missing_asset)
+    with pytest.raises(HTTPException) as unbound:
+        await router.plan_authorized_task_with_local_model(pid, form, user={'id': str(uid)})
+    assert unbound.value.status_code == 409
