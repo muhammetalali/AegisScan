@@ -75,7 +75,7 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
     navigate(scans.length===1?'/scan/'+scans[0]+'/progress':'/scan')
   }
 
-  const start=async()=>{
+  const start=async(launchScans: boolean)=>{
     if(!id)return; if(contextQuery.data&&!contextQuery.data.modes.includes(mode))return void toast.error('This scan type is not enabled for your account.'); if(mode==='file'&&!file)return void toast.error('Choose a file or ZIP bundle.'); if(mode!=='file'&&!target.trim())return void toast.error('Enter a target.')
     const inferred=mode==='file'?null:detectAssessmentTargetMode(target)
     if(inferred&&contextQuery.data&&!contextQuery.data.modes.includes(inferred))return void toast.error('This target type is not enabled for your account.')
@@ -87,6 +87,11 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
       if(prepared.authorization?.state!=='authorized'){
         toast.info('Target prepared. Authorization request is ready for governed approval.')
         navigate('/assurance/governance')
+        return
+      }
+      if(!launchScans){
+        toast.success('Target prepared without starting any scans.')
+        navigate('/assets')
         return
       }
       await execute(prepared)
@@ -147,10 +152,16 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
       </details>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-5">
         <p role="status" className="min-w-0 text-sm text-muted-foreground">{status || t('Ready to start a new assessment. No prior scan is required.')}</p>
-        <button type="button" onClick={start} disabled={busy || (mode==='file'?!file:!target.trim())}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={()=>start(false)} disabled={busy || (mode==='file'?!file:!target.trim())}
+            className="inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold hover:bg-muted/30 disabled:opacity-50">
+            {t('Prepare target only (no scans)')}
+          </button>
+        <button type="button" onClick={()=>start(true)} disabled={busy || (mode==='file'?!file:!target.trim())}
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">
           {busy?<Loader2 className="h-4 w-4 animate-spin"/>:<ShieldCheck className="h-4 w-4"/>}{busy?t('Starting assessment…'):'Start Assessment'}
         </button>
+        </div>
       </div>
     </section>
   </div>
