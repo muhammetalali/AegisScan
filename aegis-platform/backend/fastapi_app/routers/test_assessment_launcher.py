@@ -478,3 +478,25 @@ def test_concurrent_preapproved_network_does_not_reactivate_revoked_target(monke
     with pytest.raises(HTTPException) as exc:
         launcher._ensure_authorization(asset, 'employee-1')
     assert exc.value.status_code == 409
+
+
+def test_task_provider_readiness_reports_missing_provider_without_falsely_promoting_runtime(monkeypatch):
+    from fastapi_app.services import web_labs_preparation
+    monkeypatch.setattr(web_labs_preparation, '_provider_metadata',
+                        lambda _project: ({'state': 'missing', 'decision_ref': None}, []))
+    result = launcher._task_provider_readiness('project-1')['burp_mcp']
+    assert result['provider_state'] == 'missing'
+    assert result['runtime_verified'] is False
+    assert result['declared_operations'] == []
+    assert result['available_lab_definitions'] == ['bac-orders-v1']
+
+
+def test_task_provider_readiness_approved_metadata_still_not_claims_runtime(monkeypatch):
+    from fastapi_app.services import web_labs_preparation
+    monkeypatch.setattr(web_labs_preparation, '_provider_metadata',
+                        lambda _project: ({'state': 'metadata_ready', 'decision_ref': 'decision-1'},
+                                          ['burp.http_request']))
+    result = launcher._task_provider_readiness('project-1')['burp_mcp']
+    assert result['provider_state'] == 'metadata_ready'
+    assert result['runtime_verified'] is False
+    assert result['declared_operations'] == ['burp.http_request']
