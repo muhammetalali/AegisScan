@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
+from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import BotoCoreError, ClientError
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -587,6 +588,11 @@ def _download_s3_object(
     return digest.hexdigest(), size
 
 
+# Single PUT preserves FULL_OBJECT SHA256 on B2 Object Lock endpoints.
+# Fail closed for larger ciphertext until composite multipart checksums are implemented.
+MAX_SINGLE_PUT_BYTES = 5 * 1024**3
+
+
 def _push(args: argparse.Namespace) -> dict[str, Any]:
     source = Path(args.source).resolve()
     if not source.is_file():
@@ -612,10 +618,16 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
     envelope = _encrypt_file(source, encrypted, root_key, backup_id)
 
     try:
+        if encrypted.stat().st_size >= MAX_SINGLE_PUT_BYTES:
+            raise BackupError(
+                "encrypted backup exceeds single-PUT SHA256 limit; "
+                "multipart requires verified COMPOSITE checksum support"
+            )
         s3.upload_file(
             str(encrypted),
             args.bucket,
             object_key,
+            Config=TransferConfig(multipart_threshold=MAX_SINGLE_PUT_BYTES, use_threads=False),
             ExtraArgs={
                 "ContentType": "application/octet-stream",
                 # Require byte-for-byte integrity on versioned Object Lock PUT.
