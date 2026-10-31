@@ -58,6 +58,10 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
       AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
       AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
+      # LM Studio is hosted on the Windows VMnet8 interface; model plans never execute tools.
+      AEGIS_LM_STUDIO_BASE_URL: ${AEGIS_LM_STUDIO_BASE_URL:-}
+      AEGIS_LM_STUDIO_MODEL: ${AEGIS_LM_STUDIO_MODEL:-aegisscan-planner}
+      AEGIS_LM_STUDIO_API_TOKEN: ${AEGIS_LM_STUDIO_API_TOKEN:-}
       # Shared service session ceilings; provider, scope and evidence guards remain unchanged.
       AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS: ${AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS:-100}
       AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE: ${AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE:-60}

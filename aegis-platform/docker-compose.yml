@@ -66,6 +66,10 @@ services:
       AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
       AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
+      # LM Studio is hosted on the Windows VMnet8 interface; model plans never execute tools.
+      AEGIS_LM_STUDIO_BASE_URL: ${AEGIS_LM_STUDIO_BASE_URL:-}
+      AEGIS_LM_STUDIO_MODEL: ${AEGIS_LM_STUDIO_MODEL:-aegisscan-planner}
+      AEGIS_LM_STUDIO_API_TOKEN: ${AEGIS_LM_STUDIO_API_TOKEN:-}
     depends_on:
       django: {condition: service_healthy}
       redis: {condition: service_healthy}
