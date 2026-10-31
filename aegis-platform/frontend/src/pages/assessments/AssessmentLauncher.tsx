@@ -25,7 +25,7 @@ export const detectAssessmentTargetMode = (value: string): Exclude<Mode, 'file'>
 }
 type Depth='quick'|'standard'|'deep'|'comprehensive'
 type Project={id:string;name:string;environment?:string}
-type LauncherContext={project_id:string;suggested_networks:string[];modes:Mode[];default_depth:Depth;scope_mode:string;automatic_scope_activation:boolean}
+type LauncherContext={project_id:string;suggested_networks:string[];modes:Mode[];default_depth:Depth;scope_mode:string;automatic_scope_activation:boolean;integrations?:{burp_mcp?:{provider_state:string;decision_ref:string|null;declared_operations:string[];runtime_verified:boolean;available_lab_definitions:string[]}}}
 type Prepared={project_id:string;asset:{id:string;name:string;type:string;target:string;created:boolean};authorization:{state:'authorized'|'pending';source:string;id:string|null;target:string;authorized:boolean;request?:any};depth:Depth;recommended_capabilities:string[]}
 
 const modes=[
@@ -125,6 +125,14 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
         </div>}
       </label>}
 
+      {mode==='url' && contextQuery.data?.integrations?.burp_mcp && <section className="mt-5 rounded-xl border bg-background/40 p-4" aria-label="Burp integration readiness">
+        <p className="text-sm font-semibold">Burp MCP integration (read-only readiness)</p>
+        <p className="mt-2 text-xs text-muted-foreground">Provider: {contextQuery.data.integrations.burp_mcp.provider_state === 'metadata_ready'
+          ? 'configuration available; live execution not verified'
+          : 'not configured in this project'} · Runtime: not verified</p>
+        <p className="mt-1 text-xs text-muted-foreground">Packaged web lab: {contextQuery.data.integrations.burp_mcp.available_lab_definitions.join(', ') || 'none'}.
+          Authentication/OTP/JWT challenge execution is not implied by this readiness state.</p>
+      </section>}
       <details className="mt-5 rounded-xl border p-4">
         <summary className="cursor-pointer text-sm font-medium">{t('Advanced settings (optional)')}</summary>
         <div className="mt-3">
