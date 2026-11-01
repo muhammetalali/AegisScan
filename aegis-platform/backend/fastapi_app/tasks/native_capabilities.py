@@ -222,7 +222,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
         engine = _engine('invalid-native-capability', ScanEngine.EngineCategory.ANALYSIS, 60)
         return _fail(persisted, _execution(persisted, engine), str(exc))
 
-    expected_queue = BROWSER_QUEUE if capability.id == 'browser.spa-discovery' else SCANNER_QUEUE
+    expected_queue = BROWSER_QUEUE if capability.id in {'browser.dom-snapshot', 'browser.spa-discovery'} else SCANNER_QUEUE
     delivery_info = getattr(self.request, 'delivery_info', None) or {}
     delivered_queue = str(delivery_info.get('routing_key') or '')
     if not getattr(self.request, 'called_directly', False) and delivered_queue != expected_queue:
