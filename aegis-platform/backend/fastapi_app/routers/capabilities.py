@@ -412,7 +412,7 @@ async def execute_capability(
         if created_new:
             if capability.id == BURP_GATEWAY_ID:
                 task = run_burp_mcp_probe.apply_async(args=[str(created.id)], queue=SCANNER_QUEUE, routing_key=SCANNER_QUEUE)
-            elif capability.id == 'browser.spa-discovery':
+            elif capability.id in {'browser.dom-snapshot', 'browser.spa-discovery'}:
                 task = run_native_capability_scan.apply_async(
                     args=[str(created.id)],
                     queue=BROWSER_QUEUE,
