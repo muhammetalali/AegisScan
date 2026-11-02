@@ -46,11 +46,14 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
   const [mode,setMode]=useState<Mode>(preferredMode); const [depth,setDepth]=useState<Depth>('standard')
   const [target,setTarget]=useState(''); const [file,setFile]=useState<File|null>(null)
   const [busy,setBusy]=useState(false); const [status,setStatus]=useState('')
+  const [preview,setPreview]=useState<Prepared|null>(null)
+  const [selectedCapabilities,setSelectedCapabilities]=useState<string[]>([])
   const projectQuery=useQuery<any>({queryKey:['assessment-project',id],queryFn:()=>apiHelpers.get('/projects/'+id+'/'),enabled:Boolean(id)})
   const contextQuery=useQuery<LauncherContext>({queryKey:['assessment-context',id],queryFn:()=>apiHelpers.get('/assessment-launcher/context',{params:{project_id:id}}),enabled:Boolean(id)})
   const project:Project|null=useMemo(()=>projectQuery.data?.project??projectQuery.data??null,[projectQuery.data])
   useEffect(()=>{const suggested=contextQuery.data?.suggested_networks?.[0];if(mode==='network'&&!target&&suggested)setTarget(suggested)},[contextQuery.data,mode,target])
   useEffect(()=>{const allowed=contextQuery.data?.modes;if(allowed?.length&&!allowed.includes(mode)){setMode(allowed[0]);setTarget('');setFile(null)}},[contextQuery.data?.modes,mode])
+  useEffect(()=>{setPreview(null);setSelectedCapabilities([])},[mode,depth,target,file,id])
   const choose=(next:Mode)=>{setMode(next);setStatus('');setFile(null);setTarget(next==='network'?(contextQuery.data?.suggested_networks?.[0]||''):'')}
   const updateTarget=(value:string)=>{
     setTarget(value)
@@ -60,8 +63,9 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
     }
   }
 
-  const execute=async(prepared:Prepared)=>{
-    const caps=prepared.recommended_capabilities||[]; if(!caps.length)throw new Error('No execution-ready capability is available for this target.')
+  const execute=async(prepared:Prepared,selected?:string[])=>{
+    const recommended=prepared.recommended_capabilities||[]
+    const caps=selected?recommended.filter(value=>selected.includes(value)):recommended; if(!caps.length)throw new Error('No execution-ready capability is available for this target.')
     const scans:string[]=[]; const failures:string[]=[]
     for(let i=0;i<caps.length;i+=1){
       const capabilityId=caps[i]; setStatus('Launching '+capabilityId+' · '+(i+1)+'/'+caps.length)
@@ -75,7 +79,15 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
     navigate(scans.length===1?'/scan/'+scans[0]+'/progress':'/scan')
   }
 
-  const start=async(launchScans: boolean)=>{
+  const executeSelected=async()=>{
+    if(!preview||!selectedCapabilities.length)return
+    setBusy(true)
+    try{await execute(preview,selectedCapabilities)}
+    catch(error:any){toast.error(error?.message||'Unable to start selected capabilities.')}
+    finally{setBusy(false)}
+  }
+
+  const start=async(launchScans: boolean,previewOnly=false)=>{
     if(!id)return; if(contextQuery.data&&!contextQuery.data.modes.includes(mode))return void toast.error('This scan type is not enabled for your account.'); if(mode==='file'&&!file)return void toast.error('Choose a file or ZIP bundle.'); if(mode!=='file'&&!target.trim())return void toast.error('Enter a target.')
     const inferred=mode==='file'?null:detectAssessmentTargetMode(target)
     if(inferred&&contextQuery.data&&!contextQuery.data.modes.includes(inferred))return void toast.error('This target type is not enabled for your account.')
@@ -87,6 +99,11 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
       if(prepared.authorization?.state!=='authorized'){
         toast.info('Target prepared. Authorization request is ready for governed approval.')
         navigate('/assurance/governance')
+        return
+      }
+      if(previewOnly){
+        setPreview(prepared);setSelectedCapabilities([])
+        setStatus('Plan ready: choose the capabilities to start. No scans have been launched.')
         return
       }
       if(!launchScans){
@@ -150,9 +167,28 @@ export const AssessmentLauncher=({ projectOverride, preferredMode='network' }: {
           <p className="mt-3 text-xs text-muted-foreground">{t('Assets, authorized scope and evidence are handled automatically by the existing platform.')}</p>
         </div>
       </details>
+      {preview && <section aria-label="Prepared execution plan" className="mt-5 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">Authorized execution plan · {preview.recommended_capabilities.length} eligible capabilities</h2>
+        <p className="mt-1 text-xs text-muted-foreground">Select only the capabilities required for this test. Preview does not launch scans.</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">{preview.recommended_capabilities.map(capability=>
+          <label key={capability} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={selectedCapabilities.includes(capability)}
+              onChange={e=>setSelectedCapabilities(current=>e.target.checked?[...current,capability]:current.filter(item=>item!==capability))}/>
+            <span className="font-mono text-xs">{capability}</span>
+          </label>
+        )}</div>
+        <button type="button" disabled={busy||selectedCapabilities.length===0}
+          onClick={executeSelected} className="mt-4 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+          Start selected only ({selectedCapabilities.length})
+        </button>
+      </section>}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-5">
         <p role="status" className="min-w-0 text-sm text-muted-foreground">{status || t('Ready to start a new assessment. No prior scan is required.')}</p>
         <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={()=>start(false,true)} disabled={busy || (mode==='file'?!file:!target.trim())}
+            className="inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold hover:bg-muted/30 disabled:opacity-50">
+            Preview and select capabilities
+          </button>
           <button type="button" onClick={()=>start(false)} disabled={busy || (mode==='file'?!file:!target.trim())}
             className="inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold hover:bg-muted/30 disabled:opacity-50">
             {t('Prepare target only (no scans)')}

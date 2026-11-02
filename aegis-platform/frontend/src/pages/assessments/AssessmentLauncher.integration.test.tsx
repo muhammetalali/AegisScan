@@ -97,3 +97,45 @@ describe('single target input selects existing assessment mode and respects gran
   })
 
 })
+
+describe('scoped single-lab selection avoids unintended scanner fan-out',()=>{
+  it('previews without dispatch and launches only one explicitly selected capability',async()=>{
+    post.mockImplementation(async(path:string)=>{
+      if(path==='/assessment-launcher/prepare')return {
+        project_id:'project-1',asset:{id:'asset-1',target:'https://example.test'},depth:'standard',
+        authorization:{state:'authorized'},
+        recommended_capabilities:['web.http-method-policy','web.duplicate-parameter-semantics'],
+      } as never
+      return {scan:{id:'selected-scan'}} as never
+    })
+    renderLauncher()
+    await screen.findByRole('heading',{name:/Start a new assessment|بدء فحص جديد/})
+    fireEvent.click(screen.getByText(/URL \/ Domain|رابط أو اسم نطاق/))
+    fireEvent.change(screen.getByPlaceholderText('https://app.example.com'),{target:{value:'https://example.test'}})
+    fireEvent.click(screen.getByText('Preview and select capabilities'))
+    await screen.findByLabelText('Prepared execution plan')
+    expect(post).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('checkbox',{name:'web.http-method-policy'}))
+    fireEvent.click(screen.getByText('Start selected only (1)'))
+    await waitFor(()=>expect(post).toHaveBeenCalledWith(
+      '/capabilities/web.http-method-policy/execute',
+      expect.objectContaining({project_id:'project-1',asset_id:'asset-1'})
+    ))
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(post).not.toHaveBeenCalledWith(
+      '/capabilities/web.duplicate-parameter-semantics/execute',expect.anything()
+    )
+  })
+
+  it('invalidates a preview when target changes',async()=>{
+    renderLauncher()
+    await screen.findByRole('heading',{name:/Start a new assessment|بدء فحص جديد/})
+    fireEvent.click(screen.getByText(/URL \/ Domain|رابط أو اسم نطاق/))
+    fireEvent.change(screen.getByPlaceholderText('https://app.example.com'),{target:{value:'https://one.example'}})
+    fireEvent.click(screen.getByText('Preview and select capabilities'))
+    await screen.findByLabelText('Prepared execution plan')
+    fireEvent.change(screen.getByPlaceholderText('https://app.example.com'),{target:{value:'https://another.example'}})
+    await waitFor(()=>expect(screen.queryByLabelText('Prepared execution plan')).toBeNull())
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+})

@@ -101,7 +101,8 @@ _OBSERVATION_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         'statuses', 'allow_methods', 'unsafe_methods_sent',
     }),
     'web.duplicate-parameter-semantics': _COMMON_OBSERVATION_FIELDS | frozenset({
-        'synthetic_parameter', 'statuses', 'body_sha256', 'order_sensitive_observed', 'request_method',
+        'synthetic_parameter', 'statuses', 'body_sha256', 'order_sensitive_observed',
+        'request_method', 'abstention_reason',
     }),
     'web.ssrf-canary-validation': _COMMON_OBSERVATION_FIELDS | frozenset({
         'abstention_reason', 'callback_attempted', 'callback_observed', 'ssrf_confirmed',
@@ -213,13 +214,25 @@ def _duplicate_parameter_semantics(
     checkpoint: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
     baseline_target = _wire_url(target)
-    checkpoint()
-    baseline = request_pinned('GET', baseline_target, timeout=10, max_body_bytes=16384)
-    checkpoint()
-    first = request_pinned('GET', _hpp_url(baseline_target, ('1', '2')), timeout=10, max_body_bytes=16384)
-    checkpoint()
-    reverse = request_pinned('GET', _hpp_url(baseline_target, ('2', '1')), timeout=10, max_body_bytes=16384)
-    checkpoint()
+    try:
+        checkpoint()
+        baseline = request_pinned('GET', baseline_target, timeout=10, max_body_bytes=16384)
+        checkpoint()
+        first = request_pinned('GET', _hpp_url(baseline_target, ('1', '2')), timeout=10, max_body_bytes=16384)
+        checkpoint()
+        reverse = request_pinned('GET', _hpp_url(baseline_target, ('2', '1')), timeout=10, max_body_bytes=16384)
+        checkpoint()
+    except ValueError as exc:
+        if 'HTTP response exceeds max_body_bytes=16384' not in str(exc):
+            raise
+        # A truncated body cannot support a reliable order-sensitivity claim.
+        return {
+            **_base('web.duplicate-parameter-semantics'),
+            'synthetic_parameter': 'aegis_hpp_probe',
+            'request_method': 'GET',
+            'abstained': True,
+            'abstention_reason': 'Response exceeded the bounded 16384-byte comparison limit.',
+        }
     return {
         **_base('web.duplicate-parameter-semantics'),
         'synthetic_parameter': 'aegis_hpp_probe',

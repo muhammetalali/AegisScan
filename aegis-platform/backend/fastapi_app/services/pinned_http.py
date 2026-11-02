@@ -210,15 +210,17 @@ def request_pinned(
             connection.sock = transport_socket
             connection.request(verb, request_path, headers=request_headers)
             response = connection.getresponse()
+            # HEAD describes the representation size, not bytes in this response.
+            # Do not reject a valid HEAD because its Content-Length is nonzero.
             declared = response.getheader('Content-Length')
-            if declared:
+            if verb != 'HEAD' and declared:
                 try:
                     if int(declared) > max_body_bytes:
                         raise ValueError(f'HTTP response exceeds max_body_bytes={max_body_bytes}')
                 except ValueError as exc:
                     if 'exceeds max_body_bytes' in str(exc):
                         raise
-            body = response.read(max_body_bytes + 1)
+            body = b'' if verb == 'HEAD' else response.read(max_body_bytes + 1)
             if len(body) > max_body_bytes:
                 raise ValueError(f'HTTP response exceeds max_body_bytes={max_body_bytes}')
             normalized_headers: dict[str, str] = {}

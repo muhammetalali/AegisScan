@@ -396,3 +396,78 @@ def test_native_worker_propagates_persisted_approval_into_wstg(monkeypatch):
     assert seen['approved_target'] == 'https://approved.example/path'
     assert seen['target'] == 'https://approved.example/path'
     assert seen['capability_id'] == 'web.http-method-policy'
+
+
+def test_duplicate_parameter_oversized_response_abstains_without_guessing(monkeypatch):
+    import json
+    calls = []
+
+    def bounded_response(method, target, **kwargs):
+        calls.append((method, target, kwargs))
+        raise ValueError('HTTP response exceeds max_body_bytes=16384')
+
+    monkeypatch.setattr(wstg, 'request_pinned', bounded_response)
+    result = wstg._duplicate_parameter_semantics('https://example.test/')
+    assert len(calls) == 1
+    assert result['abstained'] is True
+    assert result['final_decision'] is False
+    assert 'order_sensitive_observed' not in result
+    assert '16384' in result['abstention_reason']
+    normalized = wstg.normalize_wstg_internal_output(
+        'web.duplicate-parameter-semantics',
+        json.dumps({'observations': [result]}),
+    )
+    assert normalized['observations'][0]['abstained'] is True
+    assert '16384' in normalized['observations'][0]['abstention_reason']
+
+
+def test_pinned_head_ignores_declared_representation_size(monkeypatch):
+    class FakeSocket:
+        def settimeout(self, _value):
+            pass
+
+        def connect(self, _address):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeResponse:
+        status = 200
+
+        def getheader(self, _key):
+            return '120000'
+
+        def getheaders(self):
+            return [('Content-Length', '120000')]
+
+        def read(self, _size):
+            raise AssertionError('A HEAD response must not consume a body')
+
+    class FakeConnection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = None
+
+        def request(self, method, *_args, **_kwargs):
+            assert method == 'HEAD'
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        pinned_http, 'pin_http_destination',
+        lambda *_args, **_kwargs: pinned_http.PinnedHTTPDestination(
+            scheme='http', host='example.test', port=80, resolved_ips=('93.184.216.34',)
+        ),
+    )
+    monkeypatch.setattr(pinned_http.socket, 'socket', lambda *_args, **_kwargs: FakeSocket())
+    monkeypatch.setattr(pinned_http.http.client, 'HTTPConnection', FakeConnection)
+    result = pinned_http.request_pinned(
+        'HEAD', 'http://example.test/', max_body_bytes=0
+    )
+    assert result.status == 200
+    assert result.body == b''
+    assert result.headers['content-length'] == '120000'
