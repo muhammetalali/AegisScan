@@ -207,6 +207,7 @@ def test_dirb_uses_private_resume_workspace_and_cleans_after_execution(monkeypat
             workspace = Path(self.cwd)
             assert workspace.is_dir()
             assert (workspace / '.cache' / 'dirb' / 'resume').is_dir()
+            assert kwargs['env']['HOME'] == str(workspace)
             assert workspace.stat().st_mode & 0o777 == 0o700
             assert kwargs['shell'] is False
             observation['workspace'] = workspace

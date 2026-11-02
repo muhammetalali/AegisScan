@@ -482,9 +482,9 @@ def run_native_tool(
             report_prefix = str(Path(report_dir) / 'report')
             captured_report_path = f'{report_prefix}.json'
             argv.extend(['-output', report_prefix])
-        # DIRB writes .cache/dirb/resume relative to its working directory.
-        # Give each scan a private writable workspace under the existing tmpfs,
-        # never broaden permissions or write under the read-only /app tree.
+        # DIRB resolves .cache/dirb/resume relative to HOME, not cwd.
+        # Isolate HOME as well as cwd under the existing writable tmpfs to
+        # avoid DIRB exit 255 on workers with a read-only home directory.
         isolated_cwd = None
         if spec.capability_id == 'web.dirb':
             isolated_cwd = tempfile.mkdtemp(prefix='aegis-dirb-')
@@ -493,6 +493,9 @@ def run_native_tool(
             Path(isolated_cwd, '.cache', 'dirb', 'resume').mkdir(
                 parents=True, exist_ok=True, mode=0o700,
             )
+        native_environment = _native_environment(spec)
+        if isolated_cwd is not None:
+            native_environment['HOME'] = isolated_cwd
         process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -500,7 +503,7 @@ def run_native_tool(
             text=True,
             shell=False,
             start_new_session=True,
-            env=_native_environment(spec),
+            env=native_environment,
             cwd=isolated_cwd,
             umask=0o077 if captured_report_path is not None or isolated_cwd is not None else -1,
         )
