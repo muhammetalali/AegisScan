@@ -53,6 +53,8 @@ class HTTPProbeResponse:
     headers: dict[str, str]
     body: str
     final_url: str
+    response_bytes: int | None = None
+    response_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,10 @@ class ProbeProof:
     response_preview: str = ''
     observation_confirmed: bool = False
     source_evidence_id: str = ''
+    response_size_bytes: int | None = None
+    response_size_kib: float | None = None
+    response_truncated: bool = False
+    technology_hints: tuple[str, ...] = ()
 
 
 HttpClient = Callable[[ProbeRequest], HTTPProbeResponse]
@@ -143,8 +149,13 @@ def _default_http_client(probe: ProbeRequest) -> HTTPProbeResponse:
     finally:
         connection.close()
         sock.close()
+    truncated = len(raw_body) > MAX_BODY_BYTES
     body = raw_body[:MAX_BODY_BYTES].decode('utf-8', errors='ignore')
-    return HTTPProbeResponse(status=status, headers=headers, body=body, final_url=probe.url)
+    return HTTPProbeResponse(
+        status=status, headers=headers, body=body, final_url=probe.url,
+        response_bytes=len(raw_body) if method == 'GET' and not truncated else None,
+        response_truncated=truncated,
+    )
 
 
 def _candidate_url(finding: Any) -> str:
@@ -241,6 +252,25 @@ def build_validation_plan(finding: Any, *, token: str | None = None) -> list[Pro
     return plan
 
 
+# Only bounded, non-sensitive self-declared signals; never treat these as verified stack facts.
+_TECHNOLOGY_SIGNALS = (
+    ('Cloudflare', re.compile(r'\bcloudflare\b', re.I)),
+    ('Nginx', re.compile(r'\bnginx\b', re.I)),
+    ('Apache', re.compile(r'\bapache\b', re.I)),
+    ('PHP', re.compile(r'\bphp(?:/|\b)', re.I)),
+    ('ASP.NET', re.compile(r'\basp\.net\b', re.I)),
+    ('Express', re.compile(r'\bexpress\b', re.I)),
+    ('WordPress', re.compile(r'\bwordpress\b', re.I)),
+)
+
+
+def _technology_hints(headers: dict[str, str]) -> tuple[str, ...]:
+    # Avoid passing raw server/header data (including secrets and attacker text)
+    # to reports or paid language models.
+    claims = ' '.join(str(headers.get(name, ''))[:120] for name in ('server', 'x-powered-by', 'x-generator'))
+    return tuple(label for label, pattern in _TECHNOLOGY_SIGNALS if pattern.search(claims))
+
+
 def _proof_from_http(
     probe: ProbeRequest,
     response: HTTPProbeResponse,
@@ -285,6 +315,13 @@ def _proof_from_http(
         response_header_names=tuple(sorted(set(headers) & {'content-type', 'location', 'content-security-policy', 'strict-transport-security'})),
         response_preview='',
         observation_confirmed=bool(probe.kind == 'reflected-token' and token and token in body),
+        response_size_bytes=(response.response_bytes if probe.method == 'GET'
+                             and not response.response_truncated and response.response_bytes is not None else None),
+        response_size_kib=(round(response.response_bytes / 1024, 3)
+                           if probe.method == 'GET' and not response.response_truncated
+                           and response.response_bytes is not None else None),
+        response_truncated=response.response_truncated,
+        technology_hints=_technology_hints(headers),
     )
 
 
