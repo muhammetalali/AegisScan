@@ -225,3 +225,37 @@ def test_dirb_uses_private_resume_workspace_and_cleans_after_execution(monkeypat
     )
     assert result.exit_code == 0
     assert not observation['workspace'].exists()
+
+
+def test_native_scoped_child_argv_generated_only_from_parent_authorization(monkeypatch):
+    from fastapi_app.services import native_tool_runtime as runtime
+
+    seen = []
+    def prepared_command(spec, target, options, **kwargs):
+        assert kwargs['approved_target'] == 'https://asset.example.test/start'
+        assert kwargs['approved_addresses'] == ('93.184.216.34',)
+        return ['/usr/local/bin/aegis-browser-spa-discovery', target], target
+
+    class OfflineProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            seen.extend(argv)
+
+        def poll(self):
+            return 0
+
+        def communicate(self, timeout=None):
+            return '{"schema":"aegis.browser-spa-discovery.v1","observations":[]}', ''
+
+    monkeypatch.setattr(runtime, 'build_native_argv', prepared_command)
+    monkeypatch.setattr(runtime.subprocess, 'Popen', OfflineProcess)
+    result = runtime.run_native_tool(
+        'browser.spa-discovery', 'https://asset.example.test/start', {},
+        approved_target='https://asset.example.test/start',
+        approved_addresses=('93.184.216.34',),
+    )
+    assert result.exit_code == 0
+    assert seen.count('--approved-target') == 1
+    assert seen[seen.index('--approved-target') + 1] == 'https://asset.example.test/start'
+    assert seen[seen.index('--approved-address') + 1] == '93.184.216.34'

@@ -493,6 +493,15 @@ def run_native_tool(
             Path(isolated_cwd, '.cache', 'dirb', 'resume').mkdir(
                 parents=True, exist_ok=True, mode=0o700,
             )
+        # Parent worker has already validated its current AssetAuthorization
+        # snapshot and DNS egress. Pass only that scope to trusted, scoped
+        # child analyzers; user-controlled scan options cannot set these flags.
+        if approved_target and spec.capability_id in {
+            'api.openapi-contract-security', 'browser.spa-discovery',
+        }:
+            argv.extend(['--approved-target', approved_target])
+            for address in approved_addresses:
+                argv.extend(['--approved-address', str(address)])
         native_environment = _native_environment(spec)
         if isolated_cwd is not None:
             native_environment['HOME'] = isolated_cwd
