@@ -76,6 +76,7 @@ class ProbeProof:
     response_size_kib: float | None = None
     response_truncated: bool = False
     technology_hints: tuple[str, ...] = ()
+    access_interference: str = 'none'
 
 
 HttpClient = Callable[[ProbeRequest], HTTPProbeResponse]
@@ -271,6 +272,21 @@ def _technology_hints(headers: dict[str, str]) -> tuple[str, ...]:
     return tuple(label for label, pattern in _TECHNOLOGY_SIGNALS if pattern.search(claims))
 
 
+def _access_interference(status: int, headers: dict[str, str]) -> str:
+    """Classify access interference only; it is never proof of WAF effectiveness.
+
+    A challenge can mask an otherwise real issue. Report unknown rather than
+    interpreting a blocked probe as a negative vulnerability test.
+    """
+    if status not in {403, 406, 429, 503}:
+        return 'none'
+    declared = ' '.join(str(headers.get(key, ''))[:80].lower() for key in
+                        ('server', 'x-sucuri-id', 'x-akamai-request-id', 'cf-ray'))
+    if any(marker in declared for marker in ('cloudflare', 'sucuri', 'akamai')):
+        return 'possible_waf_challenge'
+    return 'access_restricted_unattributed'
+
+
 def _proof_from_http(
     probe: ProbeRequest,
     response: HTTPProbeResponse,
@@ -322,6 +338,7 @@ def _proof_from_http(
                            and response.response_bytes is not None else None),
         response_truncated=response.response_truncated,
         technology_hints=_technology_hints(headers),
+        access_interference=_access_interference(response.status, headers),
     )
 
 
@@ -506,7 +523,10 @@ def run_offensive_validation(
             break
 
     proven = not errors and any(item.exploitability_proven for item in proofs)
-    can_disprove = not errors and any(item.kind == 'redirect-control' and 200 <= item.status < 400 for item in proofs)
+    can_disprove = not errors and any(
+        item.kind == 'redirect-control' and 200 <= item.status < 400
+        and item.access_interference == 'none' for item in proofs
+    )
     state = 'confirmed' if proven else 'not_reproduced' if can_disprove else 'inconclusive'
     confidence = 'high' if proven else 'medium' if proofs else 'low'
     successful = bool(proofs) and not errors

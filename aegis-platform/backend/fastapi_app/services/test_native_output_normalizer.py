@@ -280,3 +280,53 @@ def test_nikto_vercel_error_on_one_probe_does_not_hide_independent_actionable_fi
     assert {spec.severity for spec in specs} == {'info', 'medium'}
     assert 'nikto.999001' in {spec.rule_id for spec in specs}
 
+
+
+
+def test_browser_summary_rejects_attacker_nested_png_and_unapproved_fields():
+    import json
+    payload = {
+        'schema': 'aegis.browser-security.v1',
+        'observations': [{
+            'kind': 'browser-render-verification',
+            'browser_family': 'firefox',
+            'rendered': True,
+            'screenshot_retained': True,
+            'screenshot_sha256': 'a' * 64,
+            'screenshot_bytes': 100,
+            'visual_artifact': {'png_base64': 'TOPSECRETBASE64', 'cookie': 'TOPSECRETCOOKIE'},
+            'png_base64': 'TOPSECRETBASE64',
+            'extra_report_content': 'TOPSECRETREPORT',
+        }],
+        'visual_artifacts': [{'png_base64': 'TOPSECRETBASE64'}],
+    }
+    result = normalize_native_output('browser.dom-snapshot', json.dumps(payload))
+    assert result['count'] == 1
+    observation = result['observations'][0]
+    assert observation['rendered'] is True
+    assert observation['screenshot_sha256'] == 'a' * 64
+    assert observation['screenshot_bytes'] == 100
+    assert 'TOPSECRET' not in json.dumps(result)
+    assert 'visual_artifact' not in json.dumps(result)
+    assert 'png_base64' not in json.dumps(result)
+
+
+def test_browser_summary_fails_closed_on_unknown_kinds_and_bounded_fields():
+    import json
+    payload = {
+        'observations': [
+            {'kind': 'unexpected', 'cookie': 'DONOTLEAK'},
+            {'kind': 'browser-dom-security-snapshot',
+             'title': 'x' * 4000,
+             'script_count': 10**20,
+             'third_party_resource_hosts': ['host'] * 130,
+             'internal': {'secret': 'DONOTLEAK'}},
+        ],
+    }
+    result = normalize_native_output('browser.dom-snapshot', json.dumps(payload))
+    assert result['count'] == 1
+    obs = result['observations'][0]
+    assert len(obs['title']) == 512
+    assert obs['script_count'] == 1000000
+    assert len(obs['third_party_resource_hosts']) == 100
+    assert 'DONOTLEAK' not in json.dumps(result)

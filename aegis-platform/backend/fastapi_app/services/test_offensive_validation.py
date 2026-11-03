@@ -239,3 +239,31 @@ def test_local_ai_evidence_gate_omits_raw_request_and_response():
     text = json.dumps(summary)
     for forbidden in ('private', 'https://', 'location', 'body', 'opaque'):
         assert forbidden not in text
+
+
+
+def test_waf_signal_is_interference_not_exploit_or_safety_proof():
+    probe = ProbeRequest(kind='reflected-token', method='GET',
+                         url='https://app.example/search?aegis_validation_token=marker123')
+    response = HTTPProbeResponse(
+        status=403, headers={'server': 'cloudflare', 'cf-ray': 'sensitive-marker'},
+        body='Request blocked', final_url=probe.url,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.access_interference == 'possible_waf_challenge'
+    assert result.exploitability_proven is False
+    assert result.observation_confirmed is False
+    assert 'sensitive-marker' not in str(result)
+    assert _verified_model_summary([result], state='inconclusive') is None
+
+
+def test_generic_access_denial_does_not_fabricate_waf_identity():
+    probe = ProbeRequest(kind='http-reachability', method='HEAD',
+                         url='https://app.example/')
+    response = HTTPProbeResponse(
+        status=403, headers={'server': 'ordinary-app'}, body='',
+        final_url=probe.url,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.access_interference == 'access_restricted_unattributed'
+    assert result.exploitability_proven is False

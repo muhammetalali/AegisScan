@@ -304,7 +304,13 @@ class _CDP:
 
 
 class _ScopedSocksProxy:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, approved_target: str | None = None,
+        approved_addresses: tuple[str, ...] = (),
+    ) -> None:
+        self.approved_target = approved_target
+        self.approved_origin = _origin(approved_target) if approved_target else None
+        self.approved_addresses = approved_addresses
         self.server: asyncio.AbstractServer | None = None
         self.port = 0
         self.blocked_connections = 0
@@ -395,7 +401,15 @@ class _ScopedSocksProxy:
                 return
 
             try:
-                pinned = require_authorized_target(host, resolve_dns=True)
+                if self.approved_origin:
+                    allowed = urlsplit(self.approved_origin)
+                    expected_port = allowed.port or (443 if allowed.scheme == 'https' else 80)
+                    if host.lower().rstrip('.') != (allowed.hostname or '') or port != expected_port:
+                        raise ValueError('Browser connection crossed the bound asset origin')
+                pinned = require_authorized_target(
+                    host, resolve_dns=True, approved_target=self.approved_target,
+                    approved_addresses=self.approved_addresses,
+                )
             except ValueError:
                 self.blocked_connections += 1
                 await self._reply(writer, 2)
@@ -492,6 +506,8 @@ _INSTRUMENTATION_SCRIPT = r"""
     postMessagesReceived: 0,
     webMessageRecords: [],
     innerHTMLWrites: 0,
+    sourceSinkMatchKinds: [],
+    sourceMarkerPresent: false,
     insertAdjacentHTMLCalls: 0,
     documentWriteCalls: 0,
     objectPrototypeBaseline: Object.getOwnPropertyNames(Object.prototype),
@@ -499,6 +515,23 @@ _INSTRUMENTATION_SCRIPT = r"""
     blockedWebTransportCount: 0
   };
   Object.defineProperty(globalThis, '__aegisRuntimeSignals', {value: state, configurable: false});
+  // Correlate ONLY an explicitly supplied, inert canary with DOM sink calls.
+  // No payload creation, no arbitrary secret logging, and no JS execution claim.
+  let inertMarker = null;
+  try {
+    const supplied = new URL(location.href).searchParams.get('aegis_validation_token');
+    if (typeof supplied === 'string' && /^aegis-[a-zA-Z0-9_-]{8,48}$/.test(supplied)) {
+      inertMarker = supplied;
+      state.sourceMarkerPresent = true;
+    }
+  } catch (_) {}
+  const noteSourceSink = (kind, value) => {
+    if (!inertMarker || typeof value !== 'string' || value.length > 32768) return;
+    if (!value.includes(inertMarker)) return;
+    if (!state.sourceSinkMatchKinds.includes(kind) && state.sourceSinkMatchKinds.length < 3) {
+      state.sourceSinkMatchKinds.push(kind);
+    }
+  };
   const dataType = (value) => {
     if (value === null) return 'null';
     if (Array.isArray(value)) return 'array';
@@ -601,6 +634,7 @@ _INSTRUMENTATION_SCRIPT = r"""
         get: descriptor.get,
         set(value) {
           state.innerHTMLWrites += 1;
+          noteSourceSink('innerHTML', value);
           return descriptor.set.call(this, value);
         }
       });
@@ -610,6 +644,7 @@ _INSTRUMENTATION_SCRIPT = r"""
     const originalInsert = Element.prototype.insertAdjacentHTML;
     Element.prototype.insertAdjacentHTML = function(...args) {
       state.insertAdjacentHTMLCalls += 1;
+      noteSourceSink('insertAdjacentHTML', args[1]);
       return originalInsert.apply(this, args);
     };
   } catch (_) {}
@@ -617,6 +652,7 @@ _INSTRUMENTATION_SCRIPT = r"""
     const originalWrite = document.write.bind(document);
     document.write = function(...args) {
       state.documentWriteCalls += 1;
+      for (const part of args.slice(0, 16)) noteSourceSink('document.write', part);
       return originalWrite(...args);
     };
   } catch (_) {}
@@ -694,6 +730,8 @@ _RUNTIME_SUMMARY_EXPRESSION = r"""
       innerHTMLWrites: Number(signals.innerHTMLWrites || 0),
       insertAdjacentHTMLCalls: Number(signals.insertAdjacentHTMLCalls || 0),
       documentWriteCalls: Number(signals.documentWriteCalls || 0),
+      sourceMarkerPresent: signals.sourceMarkerPresent === true,
+      sourceSinkMatchKinds: Array.isArray(signals.sourceSinkMatchKinds) ? signals.sourceSinkMatchKinds.slice(0, 3) : [],
       blockedWebSocketCount: Number(signals.blockedWebSocketCount || 0),
       blockedWebTransportCount: Number(signals.blockedWebTransportCount || 0)
     }
@@ -709,9 +747,14 @@ async def discover(
     session_file: str | None,
     wait_ms: int,
     max_events: int,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     target = validate_authorized_web_target(target)
-    require_authorized_target(target, url=True, resolve_dns=True)
+    require_authorized_target(
+        target, url=True, resolve_dns=True,
+        approved_target=approved_target, approved_addresses=approved_addresses,
+    )
     identity_ref = _safe_identity_ref(identity_ref)
     target_origin = _origin(target)
     session = _load_session(session_file)
@@ -719,7 +762,9 @@ async def discover(
     profile = Path(tempfile.mkdtemp(prefix='aegis-browser-profile-'))
     os.chmod(profile, 0o700)
     process: subprocess.Popen[bytes] | None = None
-    scope_proxy = _ScopedSocksProxy()
+    scope_proxy = _ScopedSocksProxy(
+        approved_target=approved_target, approved_addresses=approved_addresses,
+    )
     await scope_proxy.start()
     events: list[dict[str, Any]] = []
     graphql: list[dict[str, Any]] = []
@@ -773,7 +818,12 @@ async def discover(
                 parsed = urlsplit(raw_url)
                 if parsed.scheme in {'http', 'https', 'ws', 'wss'}:
                     try:
-                        require_authorized_target(_origin(raw_url), url=True, resolve_dns=True)
+                        if approved_target and _origin(raw_url) != target_origin:
+                            raise ValueError('Browser request crossed the bound asset origin')
+                        require_authorized_target(
+                            _origin(raw_url), url=True, resolve_dns=True,
+                            approved_target=approved_target, approved_addresses=approved_addresses,
+                        )
                     except ValueError:
                         blocked_out_of_scope_requests += 1
                         try:
@@ -1080,6 +1130,13 @@ async def discover(
             'inner_html_write_count': int(signals.get('innerHTMLWrites') or 0),
             'insert_adjacent_html_count': int(signals.get('insertAdjacentHTMLCalls') or 0),
             'document_write_count': int(signals.get('documentWriteCalls') or 0),
+            'source_marker_present': signals.get('sourceMarkerPresent') is True,
+            'source_to_sink_flow_candidate': bool(signals.get('sourceSinkMatchKinds')),
+            'source_to_sink_kinds': [
+                kind for kind in ('innerHTML', 'insertAdjacentHTML', 'document.write')
+                if kind in (signals.get('sourceSinkMatchKinds') or [])[:3]
+            ],
+            'javascript_execution_verified': False,
             'blocked_websocket_count': int(signals.get('blockedWebSocketCount') or 0),
             'blocked_webtransport_count': int(signals.get('blockedWebTransportCount') or 0),
             'dom_clobbering_count': int(runtime_summary.get('domClobberingCount') or 0),
@@ -1120,6 +1177,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--identity-ref', default='anonymous')
     parser.add_argument('--wait-ms', type=int, default=4000)
     parser.add_argument('--max-events', type=int, default=2000)
+    parser.add_argument('--approved-target', default=None)
+    parser.add_argument('--approved-address', action='append', default=[])
     args = parser.parse_args()
     if not 1000 <= args.wait_ms <= 15000:
         parser.error('--wait-ms must be between 1000 and 15000')
@@ -1138,6 +1197,8 @@ def main() -> int:
                 session_file=args.session_file,
                 wait_ms=args.wait_ms,
                 max_events=args.max_events,
+                approved_target=args.approved_target,
+                approved_addresses=tuple(args.approved_address),
             )
         )
     except Exception as exc:
