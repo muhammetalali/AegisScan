@@ -566,3 +566,67 @@ def test_browser_surface_graph_persists_proven_initiator_flow_without_secret_val
         sort_keys=True,
     )
     assert 'super-secret' not in rendered
+
+
+@pytest.mark.asyncio
+async def test_scoped_socks_proxy_bound_origin_rejects_other_port_without_connecting(monkeypatch):
+    import socket
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '127.0.0.1')
+    proxy = _ScopedSocksProxy(approved_target='http://127.0.0.1:18794/')
+    await proxy.start()
+    try:
+        reader, writer = await asyncio.open_connection('127.0.0.1', proxy.port)
+        writer.write(b'\x05\x01\x00')
+        await writer.drain()
+        assert await reader.readexactly(2) == b'\x05\x00'
+        writer.write(b'\x05\x01\x00\x01' + socket.inet_aton('127.0.0.1') + (18795).to_bytes(2, 'big'))
+        await writer.drain()
+        response = await reader.readexactly(10)
+        assert response[1] == 2
+        writer.close()
+        await writer.wait_closed()
+        assert proxy.blocked_connections == 1
+        assert proxy.allowed_connections == 0
+    finally:
+        await proxy.close()
+
+
+@pytest.mark.asyncio
+async def test_scoped_socks_proxy_bound_origin_allows_exact_origin_only(monkeypatch):
+    import socket
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '127.0.0.1')
+
+    async def echo(reader, writer):
+        try:
+            writer.write(await reader.readexactly(4))
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    upstream = await asyncio.start_server(echo, '127.0.0.1', 0)
+    upstream_port = int(upstream.sockets[0].getsockname()[1])
+    proxy = _ScopedSocksProxy(approved_target=f'http://127.0.0.1:{upstream_port}/')
+    await proxy.start()
+    try:
+        reader, writer = await asyncio.open_connection('127.0.0.1', proxy.port)
+        writer.write(b'\x05\x01\x00')
+        await writer.drain()
+        assert await reader.readexactly(2) == b'\x05\x00'
+        writer.write(
+            b'\x05\x01\x00\x01' + socket.inet_aton('127.0.0.1')
+            + upstream_port.to_bytes(2, 'big')
+        )
+        await writer.drain()
+        assert (await reader.readexactly(10))[1] == 0
+        writer.write(b'ping')
+        await writer.drain()
+        assert await reader.readexactly(4) == b'ping'
+        writer.close()
+        await writer.wait_closed()
+        assert proxy.allowed_connections == 1
+        assert proxy.blocked_connections == 0
+    finally:
+        await proxy.close()
+        upstream.close()
+        await upstream.wait_closed()

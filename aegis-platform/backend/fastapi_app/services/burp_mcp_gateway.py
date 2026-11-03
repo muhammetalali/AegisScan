@@ -5,6 +5,8 @@ from fastapi_app.core.dependencies import project_access_q
 import hashlib
 import json
 import os
+import stat
+from pathlib import Path
 import re
 from dataclasses import dataclass
 from datetime import timedelta
@@ -234,10 +236,15 @@ def _endpoint(manifest: dict[str, Any]) -> str:
     host = (parsed.hostname or '').lower().rstrip('.')
     if not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise BurpMCPProviderError('Approved Burp MCP endpoint must be a credential-free absolute URL.')
+    unix_transport = (
+        manifest.get('mcp_transport') == 'sse-unix'
+        and os.getenv('AEGIS_BURP_MCP_UNIX_SOCKET') == '/app/media/.burp-mcp-bridge/mcp.sock'
+    )
     local_http = (
         parsed.scheme == 'http'
         and host in {'127.0.0.1', 'localhost', '::1'}
-        and os.getenv('BURP_MCP_ALLOW_INSECURE_LOCAL', '').strip().lower() in {'1', 'true', 'yes'}
+        and (unix_transport
+             or os.getenv('BURP_MCP_ALLOW_INSECURE_LOCAL', '').strip().lower() in {'1', 'true', 'yes'})
     )
     if parsed.scheme != 'https' and not local_http:
         raise BurpMCPProviderError('Approved Burp MCP endpoint must use HTTPS outside explicit local Reality mode.')
@@ -251,6 +258,26 @@ def _endpoint(manifest: dict[str, Any]) -> str:
     if not path.startswith('/') or len(path) > 300:
         raise BurpMCPProviderError('Approved Burp MCP endpoint path is invalid.')
     return urlunsplit((parsed.scheme, authority, path, '', ''))
+
+
+def _approved_unix_socket() -> str:
+    # The configured endpoint is immutable and local to the existing media mount.
+    fixed = Path('/app/media/.burp-mcp-bridge/mcp.sock')
+    if os.getenv('AEGIS_BURP_MCP_UNIX_SOCKET') != str(fixed):
+        raise BurpMCPProviderError('Burp UDS bridge path is not configured to the fixed local socket.')
+    try:
+        parent = fixed.parent.lstat()
+        endpoint = fixed.lstat()
+    except OSError as exc:
+        raise BurpMCPProviderError('Burp UDS bridge is not available.') from exc
+    if (not stat.S_ISDIR(parent.st_mode)
+            or not stat.S_ISSOCK(endpoint.st_mode)
+            or parent.st_uid != os.geteuid() or endpoint.st_uid != os.geteuid()
+            or parent.st_mode & 0o077
+            or endpoint.st_mode & 0o077
+            or endpoint.st_mode & 0o600 != 0o600):
+        raise BurpMCPProviderError('Burp UDS bridge filesystem identity or permissions are invalid.')
+    return str(fixed)
 
 
 def _current_provider_approval(
@@ -317,11 +344,11 @@ def _current_provider_approval(
 
 def validate_transport_manifest(manifest: dict, mapping: dict) -> None:
     transport = manifest.get('mcp_transport', 'legacy-jsonrpc-http')
-    if not isinstance(transport, str) or transport not in {'legacy-jsonrpc-http', 'sse'}:
+    if not isinstance(transport, str) or transport not in {'legacy-jsonrpc-http', 'sse', 'sse-unix'}:
         raise BurpMCPProviderError('Unsupported Burp MCP transport.')
-    if transport == 'sse' and mapping != {'burp.http_request': 'send_http1_request'}:
+    if transport in {'sse', 'sse-unix'} and mapping != {'burp.http_request': 'send_http1_request'}:
         raise BurpMCPProviderError('SSE currently admits only the pinned HTTP/1 fixture probe tool.')
-    if 'burp.http_request' in mapping and transport != 'sse':
+    if 'burp.http_request' in mapping and transport not in {'sse', 'sse-unix'}:
         raise BurpMCPProviderError('The HTTP fixture probe requires MCP SSE lifecycle.')
     pin = manifest.get('mcp_tool_schema_sha256', '')
     if not isinstance(pin, str) or (pin and not re.fullmatch(r'[0-9a-f]{64}', pin)):
@@ -510,12 +537,14 @@ def _perform_mcp_call(
     request_arguments: dict | None = None,
     cancel_check=None,
 ) -> tuple[Any, str]:
-    if transport == 'sse':
+    if transport in {'sse', 'sse-unix'}:
         try:
+            unix_socket = _approved_unix_socket() if transport == 'sse-unix' else ''
             call = call_burp_sse(endpoint=endpoint, provider_tool_name=provider_tool_name,
                                  arguments=request_arguments or health_request_arguments(arguments['target']),
                                  request_id=request_id, bearer_token=bearer_token,
-                                 expected_schema_sha256=expected_schema_sha256, cancel_check=cancel_check)
+                                 expected_schema_sha256=expected_schema_sha256, cancel_check=cancel_check,
+                                 uds_path=unix_socket)
             return {'mcp_result': call.result, 'transport_metadata': call.metadata}, call.request_id
         except MCPTransportError as exc:
             failure = BurpMCPProviderError(str(exc))
@@ -700,7 +729,7 @@ def start_burp_mcp_session(
         if credential is not None:
             contract['credential_version'] = int(credential.version)
         if lab_credential_refs is not None:
-            if requested != ['burp.http_request'] or governance.manifest.get('mcp_transport') != 'sse':
+            if requested != ['burp.http_request'] or governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
                 raise BurpMCPAuthorizationError('The BAC recipe requires the pinned SSE HTTP-only session.')
             if credential_id and credential_id in lab_credential_refs:
                 raise BurpMCPAuthorizationError('Provider authentication cannot be a target identity credential.')
@@ -900,7 +929,7 @@ def _invocation_context(session_id, actor_id, op, arguments, idem):
         validate_lab_bindings(session, actor_id)
         if safe_arguments['lab_step'] not in session_steps(session):
             raise BurpMCPAuthorizationError('This step is not part of the pinned session recipe.')
-        if governance.manifest.get('mcp_transport') != 'sse':
+        if governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
             raise BurpMCPAuthorizationError('BAC recipe cannot fall back to a legacy provider.')
     arguments_sha256 = _sha(safe_arguments)
     request_fingerprint = _sha({

@@ -7,10 +7,11 @@ import json
 import sys
 from typing import Any
 from urllib.parse import urljoin, urlsplit
+from contextlib import nullcontext
 
 import yaml
 
-from fastapi_app.services.pinned_http import get_pinned_same_origin, origin
+from fastapi_app.services.pinned_http import get_pinned_same_origin, origin, pinned_http_operation
 
 SCHEMA = 'aegis.api-schema-security.v1'
 METHODS = ('get', 'put', 'post', 'delete', 'patch', 'options', 'head', 'trace')
@@ -35,15 +36,21 @@ def schema_url(target: str, spec_path: str) -> str:
     return result
 
 
-def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int) -> tuple[str, bytes, str]:
+def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int, *, approved_target: str | None = None, approved_addresses: tuple[str, ...] = ()) -> tuple[str, bytes, str]:
     url = schema_url(target, spec_path)
-    response = get_pinned_same_origin(
-        url,
-        headers=REQUEST_HEADERS,
-        timeout=timeout,
-        max_body_bytes=max_bytes,
-        max_redirects=1,
+    operation = (
+        pinned_http_operation(target, approved_target=approved_target,
+                              approved_addresses=approved_addresses)
+        if approved_target else nullcontext()
     )
+    with operation:
+        response = get_pinned_same_origin(
+            url,
+            headers=REQUEST_HEADERS,
+            timeout=timeout,
+            max_body_bytes=max_bytes,
+            max_redirects=1,
+        )
     if not 200 <= response.status < 300:
         raise RuntimeError(f'API schema request returned HTTP {response.status}')
     return response.url, response.body, response.content_type
@@ -169,13 +176,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--spec-path', default='/openapi.json')
     parser.add_argument('--max-spec-bytes', type=int, default=1048576)
     parser.add_argument('--timeout-seconds', type=int, default=10)
+    parser.add_argument('--approved-target', default=None)
+    parser.add_argument('--approved-address', action='append', default=[])
     args = parser.parse_args(argv)
     if not 65536 <= args.max_spec_bytes <= 2097152:
         raise SystemExit('max-spec-bytes must be between 65536 and 2097152')
     if not 2 <= args.timeout_seconds <= 30:
         raise SystemExit('timeout-seconds must be between 2 and 30')
     try:
-        url, body, content_type = fetch_schema(args.target_url, args.spec_path, args.max_spec_bytes, args.timeout_seconds)
+        url, body, content_type = fetch_schema(
+            args.target_url, args.spec_path, args.max_spec_bytes, args.timeout_seconds,
+            approved_target=args.approved_target,
+            approved_addresses=tuple(args.approved_address),
+        )
         payload = analyze_bytes(body, url)
         payload['content_type'] = content_type
     except (ValueError, RuntimeError, OSError) as exc:

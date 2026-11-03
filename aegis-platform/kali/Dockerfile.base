@@ -64,17 +64,18 @@ RUN set -eux; \
     test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.7-3"; \
     test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2"; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/debconf/*-old /var/cache/ldconfig/aux-cache /var/log/apt/* /var/log/dpkg.log /var/log/alternatives.log /var/log/faillog /var/log/lastlog; \
-    find /etc /usr /var -xdev ! -path /etc/hosts ! -path /etc/hostname ! -path /etc/resolv.conf -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    # A full /usr restamp copies up the entire pinned Kali base in overlayfs
+    # and can exhaust an otherwise healthy ephemeral CI runner. Dpkg owns
+    # package mtimes; only generated package metadata needs normalization.
+    find /etc/apt /var/lib/dpkg -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
     && useradd --no-log-init --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /opt/aegis-runner /workspace /artifacts \
     && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts \
     && rm -f /var/log/faillog /var/log/lastlog \
-    && find /etc /home /opt /workspace /artifacts /var -xdev \
-        ! -path /etc/hosts \
-        ! -path /etc/hostname \
-        ! -path /etc/resolv.conf \
+    && find /etc/apt /etc/passwd /etc/group /etc/shadow /etc/gshadow \
+        /home /opt /workspace /artifacts /var/lib/dpkg -xdev \
         -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 COPY runner /opt/aegis-runner

@@ -84,3 +84,38 @@ def test_path_and_operation_limits_fail_closed():
     body = json.dumps({'openapi': '3.0.3', 'info': {'title': 'x', 'version': '1'}, 'paths': oversized_paths}).encode()
     with pytest.raises(ValueError, match='10000 paths'):
         analyze_bytes(body, 'https://api.example.test/openapi.json')
+
+
+def test_api_schema_subprocess_uses_bound_origin_with_pinned_dns(monkeypatch):
+    from fastapi_app.services import api_schema_security, pinned_http
+    from fastapi_app.services.pinned_http import PinnedHTTPResponse
+
+    checked = []
+    def checked_scope(value, **kwargs):
+        checked.append((value, kwargs))
+        assert kwargs['approved_target'] == 'https://api.lab.test/app'
+        assert kwargs['approved_addresses'] == ('93.184.216.34',)
+        return ('93.184.216.34',)
+
+    def offline_fixture(url, **kwargs):
+        assert pinned_http._OPERATION_DESTINATION.get() is not None
+        assert pinned_http._OPERATION_DESTINATION.get().resolved_ips == ('93.184.216.34',)
+        return PinnedHTTPResponse(200, {'content-type': 'application/json'}, _document(), url, '93.184.216.34')
+
+    monkeypatch.setattr(pinned_http, 'require_authorized_target', checked_scope)
+    monkeypatch.setattr(api_schema_security, 'get_pinned_same_origin', offline_fixture)
+    url, body, content_type = api_schema_security.fetch_schema(
+        'https://api.lab.test/app', '/openapi.json', 65536, 10,
+        approved_target='https://api.lab.test/app',
+        approved_addresses=('93.184.216.34',),
+    )
+    assert url == 'https://api.lab.test/openapi.json'
+    assert body == _document()
+    assert content_type == 'application/json'
+    assert len(checked) >= 1
+    with pytest.raises(ValueError, match='does not cover'):
+        api_schema_security.fetch_schema(
+            'https://other.lab.test/app', '/openapi.json', 65536, 10,
+            approved_target='https://api.lab.test/app',
+            approved_addresses=('93.184.216.34',),
+        )

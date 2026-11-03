@@ -77,12 +77,17 @@ def _socket_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address, port
     return (str(address), port)
 
 
-def pin_http_destination(url: str, *, approved_target: str | None = None) -> PinnedHTTPDestination:
+def pin_http_destination(
+    url: str, *, approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
+) -> PinnedHTTPDestination:
     """Resolve and authorize one origin, including an explicitly bound scan snapshot."""
     scheme, host, port = origin(url)
     if approved_target is not None and origin(approved_target) != (scheme, host, port):
         raise ScopeAuthorizationError('Bound scan authorization does not cover this HTTP origin')
     approval = {'approved_target': approved_target} if approved_target is not None else {}
+    if approved_addresses:
+        approval['approved_addresses'] = approved_addresses
     checked = require_authorized_target(
         _scope_url(url), url=True, resolve_dns=True, **approval
     )
@@ -103,14 +108,20 @@ def pin_http_destination(url: str, *, approved_target: str | None = None) -> Pin
 
 @contextmanager
 def pinned_http_operation(
-    url: str, *, approved_target: str | None = None
+    url: str, *, approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> Iterator[PinnedHTTPDestination]:
     """Pin one approved origin and its immutable authorization snapshot per operation.
 
     ContextVar state is restored on success, failure, and cancellation. A bound
     snapshot never authorizes a different origin or unapproved private DNS IP.
     """
-    destination = pin_http_destination(url, approved_target=approved_target)
+    if approved_addresses:
+        destination = pin_http_destination(
+            url, approved_target=approved_target, approved_addresses=approved_addresses,
+        )
+    else:
+        destination = pin_http_destination(url, approved_target=approved_target)
     token = _OPERATION_DESTINATION.set(destination)
     approval_token = _OPERATION_APPROVED_TARGET.set(approved_target)
     try:
@@ -210,15 +221,17 @@ def request_pinned(
             connection.sock = transport_socket
             connection.request(verb, request_path, headers=request_headers)
             response = connection.getresponse()
+            # HEAD describes the representation size, not bytes in this response.
+            # Do not reject a valid HEAD because its Content-Length is nonzero.
             declared = response.getheader('Content-Length')
-            if declared:
+            if verb != 'HEAD' and declared:
                 try:
                     if int(declared) > max_body_bytes:
                         raise ValueError(f'HTTP response exceeds max_body_bytes={max_body_bytes}')
                 except ValueError as exc:
                     if 'exceeds max_body_bytes' in str(exc):
                         raise
-            body = response.read(max_body_bytes + 1)
+            body = b'' if verb == 'HEAD' else response.read(max_body_bytes + 1)
             if len(body) > max_body_bytes:
                 raise ValueError(f'HTTP response exceeds max_body_bytes={max_body_bytes}')
             normalized_headers: dict[str, str] = {}

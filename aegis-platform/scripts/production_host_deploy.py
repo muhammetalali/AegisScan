@@ -1585,6 +1585,61 @@ def _rollback_application(
     _accept(origin)
 
 
+def _ensure_private_burp_bridge() -> None:
+    """Reconcile the pinned localhost-only MCP socket on the production host.
+
+    Reuse media_data and the existing Burp JVM; no Docker service or TCP port.
+    The socket is owned by the same unprivileged UID as the FastAPI container.
+    """
+    account = "aegis-burp-socket"
+    uid = "10001"
+    if os.geteuid() != 0:
+        raise DeployError("Burp host UDS bridge reconciliation requires root")
+    for entry, key in (("passwd", 2), ("group", 2)):
+        present = subprocess.run(["getent", entry, account], text=True, capture_output=True)
+        if present.returncode == 0:
+            values = present.stdout.strip().split(":")
+            if len(values) <= key or values[key] != uid:
+                raise DeployError("Burp socket service identity does not match UID/GID 10001")
+            continue
+        conflict = subprocess.run(["getent", entry, uid], text=True, capture_output=True)
+        if conflict.returncode == 0:
+            raise DeployError("Burp socket service UID/GID is already in use")
+        if entry == "group":
+            _run(["groupadd", "--system", "--gid", uid, account], timeout=20)
+        else:
+            _run(["useradd", "--system", "--uid", uid, "--gid", account,
+                  "--no-create-home", "--shell", "/usr/sbin/nologin", account], timeout=20)
+
+    sources = PLATFORM_DIR / "systemd"
+    units = ("aegisscan-burp-mcp-bridge.service", "aegisscan-burp-mcp-bridge.socket")
+    for name in units:
+        source = sources / name
+        if not source.is_file():
+            raise DeployError(f"Burp UDS unit missing from pinned source: {name}")
+        _run(["install", "-m", "0644", str(source), f"/etc/systemd/system/{name}"], timeout=20)
+    tmpfile = sources / "aegisscan-burp-mcp-bridge.tmpfiles.conf"
+    if not tmpfile.is_file():
+        raise DeployError("Burp private directory policy missing from pinned source")
+    destination = Path("/etc/tmpfiles.d/aegisscan-burp-mcp-bridge.conf")
+    _run(["install", "-m", "0644", str(tmpfile), str(destination)], timeout=20)
+    _run(["systemd-tmpfiles", "--create", str(destination)], timeout=20)
+    _run(["systemctl", "daemon-reload"], timeout=35)
+    _run(["systemctl", "enable", "--now", "aegisscan-burp-mcp-bridge.socket"], timeout=35)
+
+    volume = Path("/var/lib/docker/volumes/aegis-platform_media_data/_data")
+    directory = volume / ".burp-mcp-bridge"
+    socket_path = directory / "mcp.sock"
+    for path, kind, expected_mode in (
+        (directory, stat.S_ISDIR, 0o700),
+        (socket_path, stat.S_ISSOCK, 0o600),
+    ):
+        info = path.lstat()
+        if (not kind(info.st_mode) or info.st_uid != 10001
+                or info.st_gid != 10001 or stat.S_IMODE(info.st_mode) != expected_mode):
+            raise DeployError(f"Burp UDS socket permissions or identity are incorrect: {path}")
+
+
 def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     origin = _validate_origin(origin)
     _assert_clean_repo()
@@ -1616,6 +1671,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
         _preflight(env_file, deployment_env)
         build_storage = _build_stack(env_file, deployment_env)
+        _ensure_private_burp_bridge()
         _assert_storage_floor("before-service-start")
         # Build failures have not changed the running services. Restore only
         # checkout/env in that case; a rollback rebuild can fail for the same

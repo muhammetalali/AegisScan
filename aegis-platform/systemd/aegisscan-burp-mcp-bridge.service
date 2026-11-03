@@ -1,0 +1,20 @@
+[Unit]
+Description=AegisScan private Burp MCP localhost proxy
+Requires=aegisscan-burp-mcp-bridge.socket
+After=aegisscan-burp-mcp-bridge.socket
+
+[Service]
+Type=simple
+User=aegis-burp-socket
+Group=aegis-burp-socket
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:9876
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost

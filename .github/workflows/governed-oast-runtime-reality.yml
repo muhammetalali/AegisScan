@@ -178,8 +178,43 @@ jobs:
                   '.github/workflows/wstg-runtime-technical-reality.yml',
                   '.github/workflows/governed-oast-runtime-reality.yml',
               }
+              # The single-lab WSTG/UI cutover is independent of OAST:
+              # only these exact implementation+regression pairs may pass.
+              lab_required = {
+                  'aegis-platform/backend/fastapi_app/services/pinned_http.py',
+                  'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+                  'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py',
+                  'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py',
+                  'aegis-platform/backend/fastapi_app/services/test_native_parity_contract.py',
+                  'aegis-platform/backend/Dockerfile.django',
+                  'aegis-platform/backend/fastapi_app/services/api_schema_security.py',
+                  'aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py',
+                  'aegis-platform/backend/fastapi_app/services/test_api_schema_security.py',
+                  'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py',
+                  '.github/workflows/m6-legacy-recon-retirement-reality.yml',
+                  'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py',
+                  'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py',
+                  'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py',
+                  'aegis-platform/docker-compose.prod.yml',
+                  'aegis-platform/scripts/production_host_deploy.py',
+                  'aegis-platform/kali/Dockerfile.base',
+                  'tests/test_kali_foundation_snapshot_contract.py',
+                  'tests/test_production_host_deploy.py',
+                  'aegis-platform/systemd/aegisscan-burp-mcp-bridge.service',
+                  'aegis-platform/systemd/aegisscan-burp-mcp-bridge.socket',
+                  'aegis-platform/systemd/aegisscan-burp-mcp-bridge.tmpfiles.conf',
+                  'aegis-platform/backend/fastapi_app/routers/test_assessment_launcher.py',
+                  'aegis-platform/frontend/src/pages/assessments/AssessmentLauncher.tsx',
+                  'aegis-platform/frontend/src/pages/assessments/AssessmentLauncher.integration.test.tsx',
+              }
+              lab_allowed = lab_required | {
+                  '.github/workflows/wstg-runtime-technical-reality.yml',
+                  '.github/workflows/governed-oast-runtime-reality.yml',
+              }
               if g3_required <= changed_set <= g3_allowed:
                   print('GOVERNED_OAST_G3_BOUND_AUTHORIZATION_EXCEPTION=SCOPED')
+              elif lab_required <= changed_set <= lab_allowed:
+                  print('GOVERNED_OAST_G4_BOUNDED_LAB_EXCEPTION=SCOPED')
               else:
                   oast_specific = sorted((changed_set & oast_owned) - shared_triggers)
                   if oast_specific:

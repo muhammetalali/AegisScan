@@ -131,7 +131,7 @@ def _http1_schema(tool: dict[str, Any]) -> dict[str, Any]:
 
 async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
                 request_id: str, bearer_token: str, deadline_seconds: float,
-                expected_schema_sha256: str = '') -> MCPCallResult:
+                expected_schema_sha256: str = '', uds_path: str = '') -> MCPCallResult:
     _origin(endpoint)
     if urlsplit(endpoint).query:
         raise MCPTransportError('invalid_endpoint')
@@ -140,7 +140,9 @@ async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: 
         headers['Authorization'] = f'Bearer {bearer_token}'
     timeout = httpx.Timeout(min(10.0, deadline_seconds), connect=min(5.0, deadline_seconds))
     async with asyncio.timeout(deadline_seconds):
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+        transport = httpx.AsyncHTTPTransport(uds=uds_path) if uds_path else None
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False,
+                                     trust_env=False, transport=transport) as client:
             async with client.stream('GET', endpoint, headers=headers) as response:
                 if (response.status_code != 200
                         or response.headers.get('content-type', '').split(';')[0] != 'text/event-stream'
@@ -273,7 +275,8 @@ async def _call(*, cancel_check=None, **kwargs):
 
 def call_burp_sse(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
                   request_id: str, bearer_token: str = '', deadline_seconds: float = 15.0,
-                  expected_schema_sha256: str = '', cancel_check=None) -> MCPCallResult:
+                  expected_schema_sha256: str = '', cancel_check=None,
+                  uds_path: str = '') -> MCPCallResult:
     if provider_tool_name != 'send_http1_request':
         raise MCPTransportError('unsupported_tool_binding')
     if (not isinstance(request_id, str) or not request_id or len(request_id) > 128
@@ -283,7 +286,7 @@ def call_burp_sse(*, endpoint: str, provider_tool_name: str, arguments: dict[str
         return asyncio.run(_call(endpoint=endpoint, provider_tool_name=provider_tool_name,
                                  arguments=arguments, request_id=request_id, bearer_token=bearer_token,
                                  deadline_seconds=deadline_seconds, expected_schema_sha256=expected_schema_sha256,
-                                 cancel_check=cancel_check))
+                                 uds_path=uds_path, cancel_check=cancel_check))
     except MCPTransportError:
         raise
     except (httpx.HTTPError, TimeoutError, ValueError, TypeError) as exc:

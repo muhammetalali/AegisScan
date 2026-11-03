@@ -260,3 +260,97 @@ def test_montoya_wrapper_cannot_promote_unrelated_fixture_to_success():
     summary = summarize_health_result({'mcp_result': {'content': [{'type': 'text', 'text': raw}]},
                                        'transport_metadata': {}})
     assert summary['transport_probe_passed'] is False
+
+
+def test_unix_socket_burp_sse_lifecycle_uses_only_private_socket(tmp_path):
+    import select
+    import socket
+    import socketserver
+
+    with SSEContractServer() as fixture:
+        sock_path = str(tmp_path / 'local-sse.sock')
+
+        class Relay(socketserver.BaseRequestHandler):
+            def handle(self):
+                with socket.create_connection(('127.0.0.1', fixture.server.server_port), timeout=5) as upstream:
+                    while True:
+                        readable, _, _ = select.select((self.request, upstream), (), (), 10)
+                        if not readable:
+                            return
+                        for source in readable:
+                            data = source.recv(8192)
+                            if not data:
+                                return
+                            destination = upstream if source is self.request else self.request
+                            destination.sendall(data)
+
+        class UnixServer(socketserver.ThreadingUnixStreamServer):
+            daemon_threads = True
+
+        local = UnixServer(sock_path, Relay)
+        thread = threading.Thread(target=local.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = call_burp_sse(
+                endpoint='http://localhost/sse',
+                provider_tool_name='send_http1_request',
+                arguments=health_request_arguments('http://127.0.0.1:18081'),
+                request_id='unix-burp-test',
+                uds_path=sock_path,
+            )
+            assert result.metadata['transport'] == 'sse'
+            assert [item['method'] for item in fixture.messages] == [
+                'initialize', 'notifications/initialized', 'tools/list', 'tools/call',
+            ]
+            summary = summarize_health_result({'mcp_result': result.result, 'transport_metadata': result.metadata})
+            assert summary['transport_probe_passed'] is True
+            assert summary['lab_solved'] is False
+        finally:
+            local.shutdown()
+            local.server_close()
+            thread.join(timeout=2)
+
+
+def test_private_burp_socket_requires_fixed_path_and_exact_local_provider(monkeypatch):
+    import os
+    import stat
+    from pathlib import Path
+    from fastapi_app.services.burp_mcp_gateway import (
+        _endpoint, _approved_unix_socket, BurpMCPProviderError, validate_transport_manifest,
+    )
+
+    fixed = '/app/media/.burp-mcp-bridge/mcp.sock'
+    monkeypatch.delenv('BURP_MCP_ALLOW_INSECURE_LOCAL', raising=False)
+    monkeypatch.setenv('AEGIS_BURP_MCP_UNIX_SOCKET', fixed)
+    manifest = {
+        'mcp_transport': 'sse-unix',
+        'mcp_endpoint': 'http://localhost/',
+        'mcp_tools': {'burp.http_request': 'send_http1_request'},
+    }
+    validate_transport_manifest(manifest, manifest['mcp_tools'])
+    assert _endpoint(manifest) == 'http://localhost/'
+
+    def fake_lstat(path):
+        return type('Metadata', (), {
+            'st_uid': os.geteuid(),
+            'st_mode': (stat.S_IFSOCK | 0o600) if str(path) == fixed else (stat.S_IFDIR | 0o700),
+        })()
+
+    monkeypatch.setattr(Path, 'lstat', fake_lstat)
+    assert _approved_unix_socket() == fixed
+    with pytest.raises(BurpMCPProviderError):
+        _endpoint({**manifest, 'mcp_endpoint': 'http://external.example.invalid/'})
+
+    monkeypatch.setenv('AEGIS_BURP_MCP_UNIX_SOCKET', '/tmp/attacker.sock')
+    with pytest.raises(BurpMCPProviderError):
+        _approved_unix_socket()
+    with pytest.raises(BurpMCPProviderError):
+        _endpoint(manifest)
+
+    monkeypatch.setenv('AEGIS_BURP_MCP_UNIX_SOCKET', fixed)
+    monkeypatch.setattr(Path, 'lstat', lambda path: type('BadMeta', (), {
+        'st_uid': os.geteuid(),
+        'st_mode': stat.S_IFSOCK | 0o666,
+    })())
+    with pytest.raises(BurpMCPProviderError, match='permissions'):
+        _approved_unix_socket()

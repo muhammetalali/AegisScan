@@ -304,7 +304,13 @@ class _CDP:
 
 
 class _ScopedSocksProxy:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, approved_target: str | None = None,
+        approved_addresses: tuple[str, ...] = (),
+    ) -> None:
+        self.approved_target = approved_target
+        self.approved_origin = _origin(approved_target) if approved_target else None
+        self.approved_addresses = approved_addresses
         self.server: asyncio.AbstractServer | None = None
         self.port = 0
         self.blocked_connections = 0
@@ -395,7 +401,15 @@ class _ScopedSocksProxy:
                 return
 
             try:
-                pinned = require_authorized_target(host, resolve_dns=True)
+                if self.approved_origin:
+                    allowed = urlsplit(self.approved_origin)
+                    expected_port = allowed.port or (443 if allowed.scheme == 'https' else 80)
+                    if host.lower().rstrip('.') != (allowed.hostname or '') or port != expected_port:
+                        raise ValueError('Browser connection crossed the bound asset origin')
+                pinned = require_authorized_target(
+                    host, resolve_dns=True, approved_target=self.approved_target,
+                    approved_addresses=self.approved_addresses,
+                )
             except ValueError:
                 self.blocked_connections += 1
                 await self._reply(writer, 2)
@@ -709,9 +723,14 @@ async def discover(
     session_file: str | None,
     wait_ms: int,
     max_events: int,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     target = validate_authorized_web_target(target)
-    require_authorized_target(target, url=True, resolve_dns=True)
+    require_authorized_target(
+        target, url=True, resolve_dns=True,
+        approved_target=approved_target, approved_addresses=approved_addresses,
+    )
     identity_ref = _safe_identity_ref(identity_ref)
     target_origin = _origin(target)
     session = _load_session(session_file)
@@ -719,7 +738,9 @@ async def discover(
     profile = Path(tempfile.mkdtemp(prefix='aegis-browser-profile-'))
     os.chmod(profile, 0o700)
     process: subprocess.Popen[bytes] | None = None
-    scope_proxy = _ScopedSocksProxy()
+    scope_proxy = _ScopedSocksProxy(
+        approved_target=approved_target, approved_addresses=approved_addresses,
+    )
     await scope_proxy.start()
     events: list[dict[str, Any]] = []
     graphql: list[dict[str, Any]] = []
@@ -773,7 +794,12 @@ async def discover(
                 parsed = urlsplit(raw_url)
                 if parsed.scheme in {'http', 'https', 'ws', 'wss'}:
                     try:
-                        require_authorized_target(_origin(raw_url), url=True, resolve_dns=True)
+                        if approved_target and _origin(raw_url) != target_origin:
+                            raise ValueError('Browser request crossed the bound asset origin')
+                        require_authorized_target(
+                            _origin(raw_url), url=True, resolve_dns=True,
+                            approved_target=approved_target, approved_addresses=approved_addresses,
+                        )
                     except ValueError:
                         blocked_out_of_scope_requests += 1
                         try:
@@ -1120,6 +1146,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument('--identity-ref', default='anonymous')
     parser.add_argument('--wait-ms', type=int, default=4000)
     parser.add_argument('--max-events', type=int, default=2000)
+    parser.add_argument('--approved-target', default=None)
+    parser.add_argument('--approved-address', action='append', default=[])
     args = parser.parse_args()
     if not 1000 <= args.wait_ms <= 15000:
         parser.error('--wait-ms must be between 1000 and 15000')
@@ -1138,6 +1166,8 @@ def main() -> int:
                 session_file=args.session_file,
                 wait_ms=args.wait_ms,
                 max_events=args.max_events,
+                approved_target=args.approved_target,
+                approved_addresses=tuple(args.approved_address),
             )
         )
     except Exception as exc:
