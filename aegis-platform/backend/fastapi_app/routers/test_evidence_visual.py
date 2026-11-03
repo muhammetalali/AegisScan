@@ -146,3 +146,55 @@ def test_spa_visual_reader_requires_same_session_source_and_sha_binding():
     row.raw_output = json.dumps(bad, sort_keys=True)
     row.sha256 = hashlib.sha256(row.raw_output.encode()).hexdigest()
     assert evidence_router._visual_png_from_evidence(row) is None
+
+
+
+def test_report_visual_claim_requires_private_image_integrity():
+    from fastapi_app.routers.reports import _high_value_evidence_claim
+    row = _record()
+    row.id = 'synthetic-proof'
+    projection = _high_value_evidence_claim(row)
+    assert projection == {
+        'visual_proof': 'render_only', 'visual_verified': True,
+        'image_size_bytes': len(_PNG), 'image_ref': 'synthetic-proof',
+        'javascript_execution_verified': False,
+    }
+    assert 'png_base64' not in json.dumps(projection)
+    row.sha256 = 'f' * 64
+    assert _high_value_evidence_claim(row) == {}
+
+
+def test_report_offensive_claim_is_confirmed_only_with_grounded_proof():
+    from fastapi_app.routers.reports import _high_value_evidence_claim
+    proof = {
+        'schema': 'aegis.offensive-validation.v1',
+        'status': 'completed', 'exploitability': {'state': 'confirmed'},
+        'errors': [],
+        'impact_assessment': {'rating': 'low'},
+        'probes': [
+            {'kind': 'redirect-control', 'method': 'GET', 'exploitability_proven': True,
+             'evidence_sha256': 'a' * 64, 'response_size_bytes': 4096,
+             'response_truncated': False, 'technology_hints': ['Nginx', 'unknown']},
+        ],
+    }
+    raw = json.dumps(proof)
+    row = SimpleNamespace(
+        id='safe-id', source='aegis-offensive-validation',
+        evidence_type='exploitability_proof', raw_output=raw,
+        sha256=hashlib.sha256(raw.encode()).hexdigest(),
+    )
+    result = _high_value_evidence_claim(row)
+    assert result['proof_state'] == 'confirmed'
+    assert result['provisional_impact_rating'] == 'low'
+    assert result['response_size_bytes'] == 4096
+    assert result['unverified_technology_hints'] == ['Nginx']
+    assert result['business_impact_verified'] is False
+    assert 'https://' not in json.dumps(result)
+    proof['probes'][0]['exploitability_proven'] = False
+    proof['probes'][0]['technology_hints'] = {'untrusted': 'bad'}
+    row.raw_output = json.dumps(proof)
+    row.sha256 = hashlib.sha256(row.raw_output.encode()).hexdigest()
+    result = _high_value_evidence_claim(row)
+    assert result['proof_state'] == 'not_confirmed'
+    assert result['provisional_impact_rating'] == 'unrated'
+    assert 'unverified_technology_hints' not in result

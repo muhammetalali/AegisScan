@@ -440,10 +440,15 @@ def test_report_expiration_storage_failure_is_durable_and_retryable(report_proje
     )
     report.file.save(f"{report.id}.json", ContentFile(b"{}"))
     storage = report.file.storage
-    real_delete = storage.delete
-    monkeypatch.setattr(storage, "delete", lambda _name: (_ for _ in ()).throw(OSError("storage unavailable")))
-
-    failed = expire_report_exports.run()
+    # Patch the actual storage class only inside a scoped context. Patching
+    # Django's lazy DefaultStorage proxy leaks into pytest monkeypatch teardown.
+    storage.delete  # Resolve the underlying concrete storage first.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            type(storage._wrapped), "delete",
+            lambda self, _name: (_ for _ in ()).throw(OSError("storage unavailable")),
+        )
+        failed = expire_report_exports.run()
 
     report.refresh_from_db()
     assert failed["expired"] == 0
@@ -452,7 +457,6 @@ def test_report_expiration_storage_failure_is_durable_and_retryable(report_proje
     assert report.file
     assert "storage unavailable" in report.error_message
 
-    monkeypatch.setattr(storage, "delete", real_delete)
     retried = expire_report_exports.run()
     report.refresh_from_db()
     assert retried["expired"] == 1

@@ -282,6 +282,74 @@ def _serialize(report: DataExport):
                           completed_at=report.completed_at.astimezone(timezone.utc).isoformat() if report.completed_at else None,
                           expires_at=report.expires_at.astimezone(timezone.utc).isoformat())
 
+def _high_value_evidence_claim(row) -> dict:
+    """Local, bounded, integrity-checked projection; no raw bodies or screenshots in exports."""
+    source = str(getattr(row, 'source', '') or '')
+    if source not in {'aegis-offensive-validation', 'aegis-browser-security', 'aegis-browser-spa-discovery'}:
+        return {}
+    raw = getattr(row, 'raw_output', None)
+    if not isinstance(raw, str) or len(raw) > 4 * 1024 * 1024:
+        return {}
+    if hashlib.sha256(raw.encode('utf-8', errors='replace')).hexdigest() != getattr(row, 'sha256', None):
+        return {}
+    if source in {'aegis-browser-security', 'aegis-browser-spa-discovery'}:
+        from .evidence import _visual_png_from_evidence
+        png = _visual_png_from_evidence(row)
+        if png is None:
+            return {}
+        return {
+            'visual_proof': 'render_only',
+            'visual_verified': True,
+            'image_size_bytes': len(png),
+            'image_ref': str(row.id),
+            'javascript_execution_verified': False,
+        }
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict) or payload.get('schema') != 'aegis.offensive-validation.v1':
+        return {}
+    exploitability = payload.get('exploitability') if isinstance(payload.get('exploitability'), dict) else {}
+    probes = payload.get('probes') if isinstance(payload.get('probes'), list) else []
+    confirmed = (
+        payload.get('status') == 'completed'
+        and exploitability.get('state') == 'confirmed'
+        and not payload.get('errors')
+        and any(isinstance(item, dict) and item.get('exploitability_proven') is True
+                and isinstance(item.get('evidence_sha256'), str)
+                and len(item['evidence_sha256']) == 64 for item in probes[:8])
+    )
+    status = 'confirmed' if confirmed else 'not_confirmed'
+    impact = payload.get('impact_assessment') if isinstance(payload.get('impact_assessment'), dict) else {}
+    rating = impact.get('rating') if confirmed else 'unrated'
+    if rating not in {'low', 'medium', 'high', 'critical'}:
+        rating = 'unrated'
+    allowed_stacks = {'Cloudflare', 'Nginx', 'Apache', 'PHP', 'ASP.NET', 'Express', 'WordPress'}
+    stack_candidates: set[str] = set()
+    for proof in probes[:8]:
+        if not isinstance(proof, dict):
+            continue
+        hints = proof.get('technology_hints')
+        if isinstance(hints, list):
+            stack_candidates.update(item for item in hints[:7] if isinstance(item, str) and item in allowed_stacks)
+    stack = sorted(stack_candidates)
+    result = {
+        'proof_state': status, 'provisional_impact_rating': rating,
+        'business_impact_verified': False,
+    }
+    if stack:
+        result['unverified_technology_hints'] = stack
+    for proof in probes[:8]:
+        if not isinstance(proof, dict) or proof.get('method') != 'GET' or proof.get('response_truncated'):
+            continue
+        size = proof.get('response_size_bytes')
+        if type(size) is int and 0 <= size <= 65536:
+            result['response_size_bytes'] = size
+            break
+    return result
+
+
 @sync_to_async
 def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
     project = Project.objects.filter(id=project_id).first()
@@ -302,7 +370,14 @@ def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
         'project': {'id': str(project.id), 'name': project.name, 'environment': project.environment},
         'scan': {'id': str(scan.id), 'name': scan.name, 'status': scan.status, 'findings_count': scan.findings_count} if scan else None,
         'findings': [{'id': str(f.id), 'title': f.title, 'severity': f.severity, 'status': f.status, 'confidence': f.confidence, 'risk_score': f.risk_score, 'source_engine': f.source_engine, 'scan_id': str(f.scan_id), 'asset_id': str(f.asset_id) if f.asset_id else None} for f in findings.order_by('-risk_score', '-created_at')],
-        'evidence': [{'id': str(e.id), 'finding_id': str(e.finding_id) if e.finding_id else None, 'scan_id': str(e.scan_id) if e.scan_id else None, 'source': e.source, 'evidence_type': e.evidence_type, 'sha256': e.sha256, 'collected_at': e.collected_at.astimezone(timezone.utc).isoformat()} for e in evidence.order_by('-collected_at')],
+        'evidence': [
+            {'id': str(e.id), 'finding_id': str(e.finding_id) if e.finding_id else None,
+             'scan_id': str(e.scan_id) if e.scan_id else None, 'source': e.source,
+             'evidence_type': e.evidence_type, 'sha256': e.sha256,
+             'collected_at': e.collected_at.astimezone(timezone.utc).isoformat(),
+             'proof': _high_value_evidence_claim(e)}
+            for e in evidence.order_by('-collected_at')
+        ],
         'wstg_coverage': build_wstg_project_coverage(project, scan_id=scan_id),
     }
     if report_type == 'findings':
@@ -319,8 +394,15 @@ def _make_csv(payload: dict) -> bytes:
     output = io.StringIO(); writer = csv.writer(output)
     writer.writerow(['kind', 'id', 'title', 'severity', 'status', 'risk_score', 'source_engine', 'scan_id', 'asset_id'])
     for item in payload.get('findings', []): writer.writerow(['finding', item['id'], item['title'], item['severity'], item['status'], item['risk_score'], item['source_engine'], item['scan_id'], item['asset_id']])
-    writer.writerow([]); writer.writerow(['kind', 'id', 'finding_id', 'source', 'evidence_type', 'sha256', 'collected_at'])
-    for item in payload.get('evidence', []): writer.writerow(['evidence', item['id'], item['finding_id'], item['source'], item['evidence_type'], item['sha256'], item['collected_at']])
+    writer.writerow([]); writer.writerow(['kind', 'id', 'finding_id', 'source', 'evidence_type', 'sha256', 'collected_at', 'proof_state', 'impact_rating', 'visual_verified', 'image_ref'])
+    for item in payload.get('evidence', []):
+        claim = item.get('proof') if isinstance(item.get('proof'), dict) else {}
+        writer.writerow([
+            'evidence', item['id'], item['finding_id'], item['source'],
+            item['evidence_type'], item['sha256'], item['collected_at'],
+            claim.get('proof_state', ''), claim.get('provisional_impact_rating', ''),
+            claim.get('visual_verified', ''), claim.get('image_ref', ''),
+        ])
     coverage = payload.get('wstg_coverage')
     if isinstance(coverage, dict):
         writer.writerow([])
@@ -342,7 +424,17 @@ def _make_pdf(payload: dict, title: str) -> bytes:
     buffer = io.BytesIO(); pdf = canvas.Canvas(buffer, pagesize=A4); width, height = A4; y = height - 45; pdf.setTitle(title); pdf.setFont('Helvetica-Bold', 14); pdf.drawString(40, y, title); y -= 30; pdf.setFont('Helvetica', 9)
     lines = [f"Project: {payload['project']['name']} ({payload['project']['id']})", f"Scan: {payload.get('scan', {}).get('name', 'n/a') if payload.get('scan') else 'n/a'}", f"Findings: {len(payload.get('findings', []))}", f"Evidence records: {len(payload.get('evidence', []))}", '']
     lines.extend(f"[{f['severity']}] {f['title']} | {f['status']} | risk={f['risk_score']}" for f in payload.get('findings', [])[:200])
-    lines.extend(f"Evidence {e['id']} | {e['source']} | {e['evidence_type']} | sha256={e['sha256']}" for e in payload.get('evidence', [])[:200])
+    for e in payload.get('evidence', [])[:200]:
+        claim = e.get('proof') if isinstance(e.get('proof'), dict) else {}
+        lines.append(f"Evidence {e['id']} | {e['source']} | sha256={e['sha256']}")
+        if claim.get('proof_state'):
+            lines.append(
+                f"  PoC={claim.get('proof_state')} | provisional impact="
+                f"{claim.get('provisional_impact_rating', 'unrated')}"
+                " | business impact not verified"
+            )
+        if claim.get('visual_verified') is True:
+            lines.append("  Browser rendering verified; image is available in authenticated Evidence registry")
     coverage = payload.get('wstg_coverage')
     if isinstance(coverage, dict):
         summary = coverage.get('summary', {})
