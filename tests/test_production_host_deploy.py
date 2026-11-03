@@ -537,6 +537,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     env_file = _env_file(tmp_path)
     release_sha = "b" * 40
     events = []
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: events.append("burp-bridge"))
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: events.append("clean"))
     monkeypatch.setattr(deploy, "_ensure_release", lambda sha: events.append(("ensure", sha)))
@@ -602,7 +603,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
-    assert events.index("preflight") < events.index("build") < events.index("deploy")
+    assert events.index("preflight") < events.index("build") < events.index("burp-bridge") < events.index("deploy")
     assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts") < events.index("legacy-network-cleanup")
     assert events.index("legacy-network-cleanup") < events.index("retention")
     assert result["post_release_storage_retention"]["status"] == "success"
@@ -753,6 +754,7 @@ def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_
     env_file = _env_file(tmp_path)
     release = "a" * 40
     events = []
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
@@ -1273,6 +1275,7 @@ def test_build_failure_restores_checkout_and_env_without_redeploying_running_ser
 
 def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypatch):
     env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
     monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
@@ -1299,6 +1302,7 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
 
 def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_path, monkeypatch):
     env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
     original = env_file.read_bytes()
     checkouts = []
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
