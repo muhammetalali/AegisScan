@@ -70,3 +70,13 @@ def test_web_profile_vendors_abi_matched_tls_perl_package_immutably() -> None:
     assert "libnet-ssleay-perl=1.96-1" not in text
     assert "libnet-ssleay-perl=1.96-2" not in text
 
+
+
+def test_kali_foundation_avoids_full_usr_copyup_on_hosted_runners() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    # Rewriting every /usr inode forces large overlay copy-up; the
+    # metadata needed for reproducible direct-dependency audit remains.
+    assert 'find /etc /usr /var -xdev' not in text
+    assert 'find /etc /home /opt /workspace /artifacts /var -xdev' not in text
+    assert 'find /etc/apt /var/lib/dpkg -xdev' in text
+    assert 'test "$(dpkg-query -W' in text

@@ -1982,3 +1982,41 @@ def test_post_release_retention_requires_every_profile_image_to_be_aged(monkeypa
     result = deploy._post_release_storage_retention(release, previous)
     assert result["deleted_image_tags"] == 0
     assert result["skipped_recent_releases"] == 1
+
+
+
+def test_private_burp_bridge_requires_root_and_protects_systemd_units(monkeypatch):
+    monkeypatch.setattr(deploy.os, 'geteuid', lambda: 10001)
+    monkeypatch.setattr(deploy, '_run',
+                        lambda *_args, **_kwargs: pytest.fail('no host mutations on nonroot'))
+    with pytest.raises(deploy.DeployError, match='requires root'):
+        deploy._ensure_private_burp_bridge()
+
+
+def test_private_burp_bridge_refuses_conflicting_uid_before_host_mutation(monkeypatch):
+    monkeypatch.setattr(deploy.os, 'geteuid', lambda: 0)
+
+    def getent(argv, **_kwargs):
+        if argv == ['getent', 'passwd', 'aegis-burp-socket']:
+            return SimpleNamespace(returncode=0, stdout='aegis-burp-socket:x:10002:10001::/nonexistent:/usr/sbin/nologin')
+        raise AssertionError('no other getent query expected')
+
+    monkeypatch.setattr(deploy.subprocess, 'run', getent)
+    monkeypatch.setattr(deploy, '_run',
+                        lambda *_args, **_kwargs: pytest.fail('no host mutations on identity mismatch'))
+    with pytest.raises(deploy.DeployError, match='does not match UID/GID 10001'):
+        deploy._ensure_private_burp_bridge()
+
+
+def test_private_burp_bridge_host_units_restrict_socket_and_egress():
+    units = ROOT / 'aegis-platform/systemd'
+    socket = (units / 'aegisscan-burp-mcp-bridge.socket').read_text()
+    service = (units / 'aegisscan-burp-mcp-bridge.service').read_text()
+    tmpfiles = (units / 'aegisscan-burp-mcp-bridge.tmpfiles.conf').read_text()
+    assert 'SocketMode=0600' in socket
+    assert 'SocketUser=aegis-burp-socket' in socket
+    assert '127.0.0.1:9876' in service
+    assert 'IPAddressDeny=any' in service
+    assert 'IPAddressAllow=localhost' in service
+    assert 'NoNewPrivileges=yes' in service
+    assert '0700 aegis-burp-socket aegis-burp-socket' in tmpfiles

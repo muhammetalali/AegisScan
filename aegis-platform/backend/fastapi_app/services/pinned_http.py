@@ -86,9 +86,10 @@ def pin_http_destination(
     if approved_target is not None and origin(approved_target) != (scheme, host, port):
         raise ScopeAuthorizationError('Bound scan authorization does not cover this HTTP origin')
     approval = {'approved_target': approved_target} if approved_target is not None else {}
+    if approved_addresses:
+        approval['approved_addresses'] = approved_addresses
     checked = require_authorized_target(
-        _scope_url(url), url=True, resolve_dns=True,
-        approved_addresses=approved_addresses, **approval
+        _scope_url(url), url=True, resolve_dns=True, **approval
     )
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for raw in checked:
