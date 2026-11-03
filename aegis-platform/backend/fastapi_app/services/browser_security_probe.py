@@ -260,6 +260,7 @@ def _capture_with_firefox(
         'screenshot_sha256': screenshot_sha,
         'screenshot_bytes': file_size,
         'screenshot_retained': bool(private_png),
+        'javascript_execution_verified': False,
         'visual_artifact': ({
             'kind': 'browser-render-snapshot',
             'browser_family': 'firefox',
