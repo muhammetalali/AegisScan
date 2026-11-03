@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "g4-v2-protected-rollout-20261025-232921",
+  "request_id": "aegisscan-release-20261104-3edaeba",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "304303f6259108135ff689ed4e004ea31ae84ae5",
-  "requested_at": "2026-10-25T23:29:21Z",
-  "expires_at": "2026-10-26T23:29:21Z"
+  "requested_base_sha": "3edaebaadb7b441709754a4541cc9d59f77017e4",
+  "requested_at": "2026-11-03T23:13:26Z",
+  "expires_at": "2026-11-04T05:13:26Z"
 }
