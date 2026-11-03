@@ -18,6 +18,7 @@ from fastapi_app.services.offensive_validation import (
     HTTPProbeResponse,
     ProbeRequest,
     run_offensive_validation,
+    _proof_from_http,
 )
 
 
@@ -153,3 +154,47 @@ def test_offensive_validation_rejects_unscoped_targets(monkeypatch):
 
     assert ValidationRun.objects.filter(finding=finding).count() == 0
     assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+
+def test_proof_emits_only_bounded_high_value_response_metadata():
+    probe = ProbeRequest(kind='http-reachability', method='GET', url='https://app.example/vulnerable')
+    response = HTTPProbeResponse(
+        status=200,
+        headers={
+            'server': 'cloudflare',
+            'x-powered-by': 'PHP/8.2',
+            'x-debug-token': 'must-never-appear',
+            'content-type': 'text/html',
+        },
+        body='<html>test page</html>',
+        final_url=probe.url,
+        response_bytes=4096,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.response_size_bytes == 4096
+    assert result.response_size_kib == 4.0
+    assert result.response_truncated is False
+    assert result.technology_hints == ('Cloudflare', 'PHP')
+    assert result.response_header_names == ('content-type',)
+    assert 'must-never-appear' not in str(result)
+    assert 'cloudflare' not in str(result.response_header_names)
+
+
+def test_truncated_or_head_responses_never_claim_exact_size():
+    get_probe = ProbeRequest(kind='http-reachability', method='GET', url='https://app.example/')
+    head_probe = ProbeRequest(kind='http-reachability', method='HEAD', url='https://app.example/')
+    truncated = HTTPProbeResponse(
+        status=200, headers={'server': 'nginx'}, body='bounded text',
+        final_url=get_probe.url, response_bytes=None, response_truncated=True,
+    )
+    proof = _proof_from_http(get_probe, truncated, secrets_to_redact=())
+    assert proof.response_size_bytes is None
+    assert proof.response_size_kib is None
+    assert proof.response_truncated is True
+    head = _proof_from_http(head_probe, HTTPProbeResponse(
+        status=200, headers={'content-length': '10000000'}, body='',
+        final_url=head_probe.url, response_bytes=0,
+    ), secrets_to_redact=())
+    assert head.response_size_bytes is None
+    assert head.response_size_kib is None
