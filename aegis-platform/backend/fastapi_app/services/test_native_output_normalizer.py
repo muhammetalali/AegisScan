@@ -330,3 +330,28 @@ def test_browser_summary_fails_closed_on_unknown_kinds_and_bounded_fields():
     assert obs['script_count'] == 1000000
     assert len(obs['third_party_resource_hosts']) == 100
     assert 'DONOTLEAK' not in json.dumps(result)
+
+
+
+def test_spa_render_summary_never_leaks_private_visual_bytes():
+    import json
+    digest = 'a' * 64
+    raw = json.dumps({
+        'schema': 'aegis.browser-spa-discovery.v1',
+        'visual_artifacts': [{'png_base64': 'SUPERPRIVATEBINARY'}],
+        'observations': [{
+            'kind': 'browser-spa-summary',
+            'visual_proof_available': True,
+            'screenshot_sha256': digest,
+            'screenshot_bytes': 512,
+            'javascript_execution_verified': True,
+            'png_base64': 'SUPERPRIVATEBINARY',
+        }],
+    })
+    result = normalize_native_output('browser.spa-discovery', raw)
+    observation = result['observations'][0]
+    assert observation['visual_proof_available'] is True
+    assert observation['screenshot_sha256'] == digest
+    assert observation['screenshot_bytes'] == 512
+    assert observation['javascript_execution_verified'] is False
+    assert 'SUPERPRIVATEBINARY' not in json.dumps(result)

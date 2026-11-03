@@ -32,8 +32,10 @@ const hasVisualEvidence = (metadata: Record<string, unknown>): boolean => {
   const observations = (normalized as { observations?: unknown }).observations
   return Array.isArray(observations) && observations.some(item =>
     item && typeof item === 'object' && !Array.isArray(item) &&
-    (item as { kind?: unknown }).kind === 'browser-render-verification' &&
-    (item as { screenshot_retained?: unknown }).screenshot_retained === true
+    (((item as { kind?: unknown }).kind === 'browser-render-verification' &&
+      (item as { screenshot_retained?: unknown }).screenshot_retained === true) ||
+     ((item as { kind?: unknown }).kind === 'browser-spa-summary' &&
+      (item as { visual_proof_available?: unknown }).visual_proof_available === true))
   )
 }
 

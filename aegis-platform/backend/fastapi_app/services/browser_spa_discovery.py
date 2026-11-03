@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import asyncio
 import ipaddress
 import json
@@ -24,6 +27,34 @@ from fastapi_app.services.scope_authorization import require_authorized_target
 from fastapi_app.services.web_messaging_semantics import assess_web_messaging
 
 _SCHEMA = 'aegis.browser-spa-discovery.v1'
+_MAX_PRIVATE_CDP_IMAGE_BYTES = 256 * 1024
+_PNG_SIGNATURE = bytes.fromhex('89504e470d0a1a0a')
+
+
+def _bounded_cdp_visual_artifact(response: Any) -> dict[str, Any] | None:
+    # Raw proof remains in Evidence. Public normalized projections must not
+    # contain this base64 content; the caller records only its SHA-256.
+    if not isinstance(response, dict):
+        return None
+    encoded = response.get('data')
+    if not isinstance(encoded, str) or len(encoded) > (_MAX_PRIVATE_CDP_IMAGE_BYTES * 4 // 3 + 8):
+        return None
+    try:
+        image = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if not (32 <= len(image) <= _MAX_PRIVATE_CDP_IMAGE_BYTES
+            and image.startswith(_PNG_SIGNATURE) and image[12:16] == b'IHDR'):
+        return None
+    return {
+        'kind': 'browser-render-snapshot',
+        'browser_family': 'chromium',
+        'media_type': 'image/png',
+        'capture_method': 'same-cdp-session',
+        'sha256': hashlib.sha256(image).hexdigest(),
+        'size_bytes': len(image),
+        'png_base64': encoded,
+    }
 _MAX_SESSION_BYTES = 65536
 _MAX_STORAGE_ENTRIES = 64
 _MAX_COOKIES = 64
@@ -773,6 +804,7 @@ async def discover(
     request_meta: dict[str, dict[str, Any]] = {}
     truncated = False
     blocked_out_of_scope_requests = 0
+    visual_artifact: dict[str, Any] | None = None
 
     try:
         process = subprocess.Popen(
@@ -969,6 +1001,19 @@ async def discover(
             )
             runtime_summary = runtime_value if isinstance(runtime_value, dict) else {}
 
+            # Capture within THIS SAME CDP page session, after the runtime
+            # observation. This is render attestation, never an XSS-execution
+            # verdict. A failure cannot fabricate an image or fail the scan.
+            try:
+                screenshot = await cdp.call(
+                    'Page.captureScreenshot',
+                    {'format': 'png', 'fromSurface': True, 'captureBeyondViewport': False},
+                    timeout=10,
+                )
+                visual_artifact = _bounded_cdp_visual_artifact(screenshot)
+            except (ValueError, binascii.Error, RuntimeError, TimeoutError, asyncio.TimeoutError):
+                pass
+
             try:
                 cookie_result = await cdp.call('Network.getAllCookies')
                 raw_cookies = (
@@ -1137,6 +1182,9 @@ async def discover(
                 if kind in (signals.get('sourceSinkMatchKinds') or [])[:3]
             ],
             'javascript_execution_verified': False,
+            'visual_proof_available': visual_artifact is not None,
+            'screenshot_sha256': visual_artifact['sha256'] if visual_artifact else '',
+            'screenshot_bytes': visual_artifact['size_bytes'] if visual_artifact else 0,
             'blocked_websocket_count': int(signals.get('blockedWebSocketCount') or 0),
             'blocked_webtransport_count': int(signals.get('blockedWebTransportCount') or 0),
             'dom_clobbering_count': int(runtime_summary.get('domClobberingCount') or 0),
@@ -1160,6 +1208,7 @@ async def discover(
             'identity_ref': identity_ref,
             'observation_count': min(len(observations), max_events + 1000),
             'observations': observations[: max_events + 1000],
+            'visual_artifacts': [visual_artifact] if visual_artifact else [],
         }
     finally:
         if process is not None:

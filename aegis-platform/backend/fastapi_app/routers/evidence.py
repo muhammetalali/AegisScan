@@ -122,8 +122,13 @@ _PNG_MAGIC = bytes.fromhex('89504e470d0a1a0a')
 
 def _visual_png_from_evidence(item: Any) -> bytes | None:
     """Validate a privately retained browser image without implying XSS execution."""
-    if getattr(item, 'source', None) != 'aegis-browser-security' or getattr(item, 'evidence_type', None) != 'scanner_output':
+    source = getattr(item, 'source', None)
+    if source not in {'aegis-browser-security', 'aegis-browser-spa-discovery'} or getattr(item, 'evidence_type', None) != 'scanner_output':
         return None
+    spa = source == 'aegis-browser-spa-discovery'
+    expected_schema = 'aegis.browser-spa-discovery.v1' if spa else 'aegis.browser-security.v1'
+    expected_family = 'chromium' if spa else 'firefox'
+    expected_observation_kind = 'browser-spa-summary' if spa else 'browser-render-verification'
     raw = getattr(item, 'raw_output', None)
     if not isinstance(raw, str) or not raw or len(raw) > 4 * 1024 * 1024:
         return None
@@ -133,7 +138,7 @@ def _visual_png_from_evidence(item: Any) -> bytes | None:
         body = json.loads(raw)
     except (ValueError, TypeError):
         return None
-    if not isinstance(body, dict) or body.get('schema') != 'aegis.browser-security.v1':
+    if not isinstance(body, dict) or body.get('schema') != expected_schema:
         return None
     artifacts = body.get('visual_artifacts')
     observations = body.get('observations')
@@ -142,7 +147,9 @@ def _visual_png_from_evidence(item: Any) -> bytes | None:
     for artifact in artifacts[:2]:
         if not isinstance(artifact, dict) or artifact.get('kind') != 'browser-render-snapshot':
             continue
-        if artifact.get('media_type') != 'image/png' or artifact.get('browser_family') != 'firefox':
+        if artifact.get('media_type') != 'image/png' or artifact.get('browser_family') != expected_family:
+            continue
+        if spa and artifact.get('capture_method') != 'same-cdp-session':
             continue
         encoded = artifact.get('png_base64')
         expected_sha = artifact.get('sha256')
@@ -159,10 +166,13 @@ def _visual_png_from_evidence(item: Any) -> bytes | None:
             continue
         if hashlib.sha256(png).hexdigest() != expected_sha:
             continue
-        if not any(isinstance(obs, dict) and obs.get('kind') == 'browser-render-verification'
-                   and obs.get('browser_family') == 'firefox'
-                   and obs.get('screenshot_sha256') == expected_sha
-                   and obs.get('screenshot_retained') is True for obs in observations[:2000]):
+        if not any(
+            isinstance(obs, dict) and obs.get('kind') == expected_observation_kind
+            and obs.get('screenshot_sha256') == expected_sha
+            and (obs.get('visual_proof_available') is True if spa
+                 else obs.get('browser_family') == 'firefox' and obs.get('screenshot_retained') is True)
+            for obs in observations[:2000]
+        ):
             continue
         return png
     return None

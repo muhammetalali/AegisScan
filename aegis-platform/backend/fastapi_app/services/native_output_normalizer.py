@@ -262,6 +262,12 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                     if kind in (item.get('source_to_sink_kinds') or [])[:3]
                 ] if isinstance(item.get('source_to_sink_kinds'), list) else [],
                 'javascript_execution_verified': False,
+                'visual_proof_available': item.get('visual_proof_available') is True,
+                'screenshot_sha256': (
+                    item['screenshot_sha256'] if isinstance(item.get('screenshot_sha256'), str)
+                    and re.fullmatch(r'[0-9a-f]{64}', item['screenshot_sha256']) else ''
+                ),
+                'screenshot_bytes': _positive_int(item.get('screenshot_bytes'), 256 * 1024),
                 'blocked_websocket_count': _positive_int(item.get('blocked_websocket_count'), 1000000),
                 'blocked_webtransport_count': _positive_int(item.get('blocked_webtransport_count'), 1000000),
                 'dom_clobbering_count': _positive_int(item.get('dom_clobbering_count'), 1000000),

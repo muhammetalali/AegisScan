@@ -114,3 +114,35 @@ async def test_visual_route_requires_existing_project_authorization(monkeypatch)
     with pytest.raises(HTTPException) as exc:
         await evidence_router.get_visual_evidence('fake-id', user={'user_id': 'outsider'})
     assert exc.value.status_code == 404
+
+
+
+def test_spa_visual_reader_requires_same_session_source_and_sha_binding():
+    row = _record()
+    data = json.loads(row.raw_output)
+    data['schema'] = 'aegis.browser-spa-discovery.v1'
+    data['observations'] = [{
+        'kind': 'browser-spa-summary',
+        'visual_proof_available': True,
+        'screenshot_sha256': hashlib.sha256(_PNG).hexdigest(),
+        'screenshot_bytes': len(_PNG),
+        'javascript_execution_verified': False,
+    }]
+    data['visual_artifacts'][0]['browser_family'] = 'chromium'
+    data['visual_artifacts'][0]['capture_method'] = 'same-cdp-session'
+    row.source = 'aegis-browser-spa-discovery'
+    row.raw_output = json.dumps(data, sort_keys=True)
+    row.sha256 = hashlib.sha256(row.raw_output.encode()).hexdigest()
+    assert evidence_router._visual_png_from_evidence(row) == _PNG
+
+    bad = json.loads(row.raw_output)
+    bad['visual_artifacts'][0]['capture_method'] = 'separate-request'
+    row.raw_output = json.dumps(bad, sort_keys=True)
+    row.sha256 = hashlib.sha256(row.raw_output.encode()).hexdigest()
+    assert evidence_router._visual_png_from_evidence(row) is None
+
+    bad['visual_artifacts'][0]['capture_method'] = 'same-cdp-session'
+    bad['observations'][0]['visual_proof_available'] = False
+    row.raw_output = json.dumps(bad, sort_keys=True)
+    row.sha256 = hashlib.sha256(row.raw_output.encode()).hexdigest()
+    assert evidence_router._visual_png_from_evidence(row) is None
