@@ -19,6 +19,7 @@ from fastapi_app.services.offensive_validation import (
     ProbeRequest,
     run_offensive_validation,
     _proof_from_http,
+    _verified_model_summary,
 )
 
 
@@ -198,3 +199,43 @@ def test_truncated_or_head_responses_never_claim_exact_size():
     ), secrets_to_redact=())
     assert head.response_size_bytes is None
     assert head.response_size_kib is None
+
+
+def test_local_ai_evidence_gate_abstains_on_unproven_reflection():
+    probe = ProbeRequest(kind='reflected-token', method='GET',
+                         url='https://app.example/?aegis_validation_token=marker')
+    response = HTTPProbeResponse(
+        status=200, headers={'server': 'Cloudflare'},
+        body='marker', final_url=probe.url, response_bytes=6,
+    )
+    candidate = _proof_from_http(probe, response, secrets_to_redact=())
+    assert candidate.exploitability_proven is False
+    assert _verified_model_summary([candidate], state='inconclusive') is None
+    assert _verified_model_summary([candidate], state='confirmed') is None
+
+
+def test_local_ai_evidence_gate_omits_raw_request_and_response():
+    import hashlib
+    landing = 'https://aegis-validation.invalid/safe-test'
+    probe = ProbeRequest(
+        kind='redirect-control', method='GET',
+        url='https://app.example/redirect?opaque=private-marker',
+        token_sha256=hashlib.sha256(landing.encode()).hexdigest(),
+    )
+    response = HTTPProbeResponse(
+        status=302,
+        headers={'server': 'nginx', 'location': landing, 'x-opaque': 'private-value'},
+        body='private-response-body',
+        final_url=probe.url,
+        response_bytes=42,
+    )
+    verified = _proof_from_http(probe, response, secrets_to_redact=('private-marker',))
+    assert verified.exploitability_proven is True
+    summary = _verified_model_summary([verified], state='confirmed')
+    assert summary is not None
+    assert summary['schema'] == 'aegis.verified-model-evidence.v1'
+    assert summary['proofs'][0]['response_size_kib'] == round(42 / 1024, 3)
+    assert summary['proofs'][0]['unverified_technology_hints'] == ['Nginx']
+    text = json.dumps(summary)
+    for forbidden in ('private', 'https://', 'location', 'body', 'opaque'):
+        assert forbidden not in text
