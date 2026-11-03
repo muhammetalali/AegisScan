@@ -537,6 +537,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     env_file = _env_file(tmp_path)
     release_sha = "b" * 40
     events = []
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: events.append("burp-bridge"))
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: events.append("clean"))
     monkeypatch.setattr(deploy, "_ensure_release", lambda sha: events.append(("ensure", sha)))
@@ -602,7 +603,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
-    assert events.index("preflight") < events.index("build") < events.index("deploy")
+    assert events.index("preflight") < events.index("build") < events.index("burp-bridge") < events.index("deploy")
     assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts") < events.index("legacy-network-cleanup")
     assert events.index("legacy-network-cleanup") < events.index("retention")
     assert result["post_release_storage_retention"]["status"] == "success"
@@ -753,6 +754,7 @@ def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_
     env_file = _env_file(tmp_path)
     release = "a" * 40
     events = []
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
@@ -1273,6 +1275,7 @@ def test_build_failure_restores_checkout_and_env_without_redeploying_running_ser
 
 def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypatch):
     env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
     monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
@@ -1299,6 +1302,7 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
 
 def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_path, monkeypatch):
     env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_ensure_private_burp_bridge", lambda: None)
     original = env_file.read_bytes()
     checkouts = []
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
@@ -1982,3 +1986,41 @@ def test_post_release_retention_requires_every_profile_image_to_be_aged(monkeypa
     result = deploy._post_release_storage_retention(release, previous)
     assert result["deleted_image_tags"] == 0
     assert result["skipped_recent_releases"] == 1
+
+
+
+def test_private_burp_bridge_requires_root_and_protects_systemd_units(monkeypatch):
+    monkeypatch.setattr(deploy.os, 'geteuid', lambda: 10001)
+    monkeypatch.setattr(deploy, '_run',
+                        lambda *_args, **_kwargs: pytest.fail('no host mutations on nonroot'))
+    with pytest.raises(deploy.DeployError, match='requires root'):
+        deploy._ensure_private_burp_bridge()
+
+
+def test_private_burp_bridge_refuses_conflicting_uid_before_host_mutation(monkeypatch):
+    monkeypatch.setattr(deploy.os, 'geteuid', lambda: 0)
+
+    def getent(argv, **_kwargs):
+        if argv == ['getent', 'passwd', 'aegis-burp-socket']:
+            return SimpleNamespace(returncode=0, stdout='aegis-burp-socket:x:10002:10001::/nonexistent:/usr/sbin/nologin')
+        raise AssertionError('no other getent query expected')
+
+    monkeypatch.setattr(deploy.subprocess, 'run', getent)
+    monkeypatch.setattr(deploy, '_run',
+                        lambda *_args, **_kwargs: pytest.fail('no host mutations on identity mismatch'))
+    with pytest.raises(deploy.DeployError, match='does not match UID/GID 10001'):
+        deploy._ensure_private_burp_bridge()
+
+
+def test_private_burp_bridge_host_units_restrict_socket_and_egress():
+    units = ROOT / 'aegis-platform/systemd'
+    socket = (units / 'aegisscan-burp-mcp-bridge.socket').read_text()
+    service = (units / 'aegisscan-burp-mcp-bridge.service').read_text()
+    tmpfiles = (units / 'aegisscan-burp-mcp-bridge.tmpfiles.conf').read_text()
+    assert 'SocketMode=0600' in socket
+    assert 'SocketUser=aegis-burp-socket' in socket
+    assert '127.0.0.1:9876' in service
+    assert 'IPAddressDeny=any' in service
+    assert 'IPAddressAllow=localhost' in service
+    assert 'NoNewPrivileges=yes' in service
+    assert '0700 aegis-burp-socket aegis-burp-socket' in tmpfiles

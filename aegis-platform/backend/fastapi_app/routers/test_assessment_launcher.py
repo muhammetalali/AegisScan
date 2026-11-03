@@ -243,6 +243,7 @@ def test_governed_launcher_changes_request_identity_for_different_actor_or_versi
 
 
 def test_dynamic_egress_configured_controller_fails_closed_without_control_root(monkeypatch):
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
     monkeypatch.setenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', 'http://127.0.0.1:18780')
     monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', raising=False)
     monkeypatch.setenv('JWT_SECRET_KEY', 'must-not-be-used-for-egress')

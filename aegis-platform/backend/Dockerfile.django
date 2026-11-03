@@ -225,7 +225,7 @@ EXPOSE 8000
 
 USER 10001:10001
 
-CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--no-control-socket"]
 
 # Production scanner target: legacy Recon is always absent. Nmap, Nuclei,
 # Semgrep, and Masscan retirement toggles stay default-off only for historical
@@ -287,9 +287,9 @@ RUN rm -f \
          command -v masscan >/dev/null; \
        fi
 USER 10001:10001
-CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--no-control-socket"]
 
 # Keep the default target suitable for independent parity and previous-release
 # reference workflows. Production Compose hard-codes the retirement build arg.
 FROM runtime AS legacy-parity-reference
-CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--no-control-socket"]

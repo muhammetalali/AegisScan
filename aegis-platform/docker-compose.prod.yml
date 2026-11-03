@@ -62,6 +62,8 @@ services:
       AEGIS_LM_STUDIO_BASE_URL: ${AEGIS_LM_STUDIO_BASE_URL:-}
       AEGIS_LM_STUDIO_MODEL: ${AEGIS_LM_STUDIO_MODEL:-aegisscan-planner}
       AEGIS_LM_STUDIO_API_TOKEN: ${AEGIS_LM_STUDIO_API_TOKEN:-}
+      # Private UDS bridge to the authorized host Burp runtime; no network port.
+      AEGIS_BURP_MCP_UNIX_SOCKET: /app/media/.burp-mcp-bridge/mcp.sock
       # Shared service session ceilings; provider, scope and evidence guards remain unchanged.
       AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS: ${AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS:-100}
       AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE: ${AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE:-60}

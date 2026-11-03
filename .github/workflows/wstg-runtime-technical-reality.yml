@@ -92,6 +92,40 @@ jobs:
               '.github/workflows/wstg-runtime-technical-reality.yml',
               '.github/workflows/governed-oast-runtime-reality.yml',
           }
+          # Single-lab acceptance remediation: WSTG transport and bounded
+          # launcher UI changes must ship with their corresponding tests.
+          # This exact lockset excludes unrelated scanner, scope and OAST code.
+          lab_required = {
+              'aegis-platform/backend/fastapi_app/services/pinned_http.py',
+              'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py',
+              'aegis-platform/backend/fastapi_app/services/test_native_parity_contract.py',
+              'aegis-platform/backend/Dockerfile.django',
+              'aegis-platform/backend/fastapi_app/services/api_schema_security.py',
+              'aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py',
+              'aegis-platform/backend/fastapi_app/services/test_api_schema_security.py',
+              'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py',
+              '.github/workflows/m6-legacy-recon-retirement-reality.yml',
+              'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py',
+              'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py',
+              'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py',
+              'aegis-platform/docker-compose.prod.yml',
+                  'aegis-platform/scripts/production_host_deploy.py',
+                  'aegis-platform/kali/Dockerfile.base',
+                  'tests/test_kali_foundation_snapshot_contract.py',
+                  'tests/test_production_host_deploy.py',
+              'aegis-platform/systemd/aegisscan-burp-mcp-bridge.service',
+              'aegis-platform/systemd/aegisscan-burp-mcp-bridge.socket',
+              'aegis-platform/systemd/aegisscan-burp-mcp-bridge.tmpfiles.conf',
+              'aegis-platform/backend/fastapi_app/routers/test_assessment_launcher.py',
+              'aegis-platform/frontend/src/pages/assessments/AssessmentLauncher.tsx',
+              'aegis-platform/frontend/src/pages/assessments/AssessmentLauncher.integration.test.tsx',
+          }
+          lab_allowed = lab_required | {
+              '.github/workflows/wstg-runtime-technical-reality.yml',
+              '.github/workflows/governed-oast-runtime-reality.yml',
+          }
           if changed <= b1_allowed:
               lockset = 'B1_RUNTIME'
           elif (
@@ -101,6 +135,8 @@ jobs:
               lockset = 'B2_GOVERNED_OAST'
           elif g3_required <= changed <= g3_allowed:
               lockset = 'G3_WSTG_BOUND_AUTHORIZATION'
+          elif lab_required <= changed <= lab_allowed:
+              lockset = 'G4_WSTG_BOUNDED_SINGLE_LAB'
           else:
               unexpected = sorted(changed - (b1_allowed | b2_oast_allowed))
               raise SystemExit(

@@ -1,0 +1,14 @@
+[Unit]
+Description=AegisScan private Burp MCP Unix-domain socket
+After=docker.service
+ConditionPathIsDirectory=/var/lib/docker/volumes/aegis-platform_media_data/_data/.burp-mcp-bridge
+
+[Socket]
+ListenStream=/var/lib/docker/volumes/aegis-platform_media_data/_data/.burp-mcp-bridge/mcp.sock
+SocketUser=aegis-burp-socket
+SocketGroup=aegis-burp-socket
+SocketMode=0600
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

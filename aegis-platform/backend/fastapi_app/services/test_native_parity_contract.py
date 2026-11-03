@@ -207,6 +207,7 @@ def test_dirb_uses_private_resume_workspace_and_cleans_after_execution(monkeypat
             workspace = Path(self.cwd)
             assert workspace.is_dir()
             assert (workspace / '.cache' / 'dirb' / 'resume').is_dir()
+            assert kwargs['env']['HOME'] == str(workspace)
             assert workspace.stat().st_mode & 0o777 == 0o700
             assert kwargs['shell'] is False
             observation['workspace'] = workspace
@@ -223,4 +224,74 @@ def test_dirb_uses_private_resume_workspace_and_cleans_after_execution(monkeypat
         'web.dirb', 'https://reserved.example.invalid', {},
     )
     assert result.exit_code == 0
+    assert not observation['workspace'].exists()
+
+
+def test_native_scoped_child_argv_generated_only_from_parent_authorization(monkeypatch):
+    from fastapi_app.services import native_tool_runtime as runtime
+
+    seen = []
+    def prepared_command(spec, target, options, **kwargs):
+        assert kwargs['approved_target'] == 'https://asset.example.test/start'
+        assert kwargs['approved_addresses'] == ('93.184.216.34',)
+        return ['/usr/local/bin/aegis-browser-spa-discovery', target], target
+
+    class OfflineProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            seen.extend(argv)
+
+        def poll(self):
+            return 0
+
+        def communicate(self, timeout=None):
+            return '{"schema":"aegis.browser-spa-discovery.v1","observations":[]}', ''
+
+    monkeypatch.setattr(runtime, 'build_native_argv', prepared_command)
+    monkeypatch.setattr(runtime.subprocess, 'Popen', OfflineProcess)
+    result = runtime.run_native_tool(
+        'browser.spa-discovery', 'https://asset.example.test/start', {},
+        approved_target='https://asset.example.test/start',
+        approved_addresses=('93.184.216.34',),
+    )
+    assert result.exit_code == 0
+    assert seen.count('--approved-target') == 1
+    assert seen[seen.index('--approved-target') + 1] == 'https://asset.example.test/start'
+    assert seen[seen.index('--approved-address') + 1] == '93.184.216.34'
+
+
+def test_katana_uses_private_home_and_cleans_without_network(monkeypatch):
+    from fastapi_app.services import native_tool_runtime as runtime
+
+    observation = {}
+
+    def prepared_command(*_args, **_kwargs):
+        return ['/usr/bin/katana', '-u', 'https://reserved.example.invalid'], 'https://reserved.example.invalid'
+
+    class NoNetworkProcess:
+        returncode = 0
+
+        def __init__(self, args, **kwargs):
+            self.cwd = kwargs['cwd']
+            assert args[0].endswith('katana')
+            assert self.cwd
+            assert kwargs['env']['HOME'] == self.cwd
+            assert kwargs['shell'] is False
+            assert Path(self.cwd).stat().st_mode & 0o777 == 0o700
+            observation['workspace'] = Path(self.cwd)
+
+        def poll(self):
+            return 0
+
+        def communicate(self, timeout=None):
+            return '{"request": {"endpoint":"https://reserved.example.invalid"}}', ''
+
+    monkeypatch.setattr(runtime, 'build_native_argv', prepared_command)
+    monkeypatch.setattr(runtime.subprocess, 'Popen', NoNetworkProcess)
+    result = runtime.run_native_tool(
+        'web.katana', 'https://reserved.example.invalid', {},
+    )
+    assert result.exit_code == 0
+    assert 'reserved.example.invalid' in result.stdout
     assert not observation['workspace'].exists()
