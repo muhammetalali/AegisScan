@@ -152,3 +152,30 @@ def test_base_digest_and_runner_version_are_bound_to_foundation():
 def test_unknown_profile_cannot_appear_silently():
     with pytest.raises(KeyError):
         _ = MANIFEST['profiles']['unregistered']
+
+
+
+def test_recon_subfinder_builder_excludes_unrelated_web_binaries():
+    recon_builder = DOCKERFILE.split('FROM golang:1.26-bookworm AS subfinder-tool', 1)[1]
+    recon_builder = recon_builder.split('FROM golang:1.26-bookworm AS amass-tool', 1)[0]
+    assert recon_builder.count('go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0') == 1
+    assert 'go install github.com/projectdiscovery/httpx/' not in recon_builder
+    assert 'go install github.com/projectdiscovery/katana/' not in recon_builder
+    assert 'COPY --from=subfinder-tool /go/bin/subfinder /usr/local/bin/subfinder' in DOCKERFILE
+    assert 'COPY --from=go-tools /go/bin/subfinder' not in DOCKERFILE
+
+
+def test_hosted_runner_storage_guard_is_shared_and_not_executable_on_production():
+    script = (REPO / 'scripts/ci/prepare_ephemeral_runner_storage.sh').read_text(encoding='utf-8')
+    for env in ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'RUNNER_OS'):
+        assert env in script
+    assert 'GITHUB_RUNNER_DISK_GATE=PASS' in script
+    for filename in (
+        'recon-subfinder-parity-reality.yml',
+        'recon-amass-parity-reality.yml',
+        'recon-dnsenum-parity-reality.yml',
+        'm6-legacy-recon-retirement-reality.yml',
+        'raw-l2-worker-reality.yml',
+    ):
+        workflow = (REPO / '.github/workflows' / filename).read_text(encoding='utf-8')
+        assert workflow.count('bash scripts/ci/prepare_ephemeral_runner_storage.sh') == 1, filename

@@ -165,13 +165,8 @@ jobs:
       - name: Prove exact checkout
         run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
       - name: Reclaim disposable GitHub-hosted build space
-        run: |
-          set -euo pipefail
-          # Only this ephemeral ubuntu-latest job; never remove production data.
-          for path in /usr/local/lib/android /usr/share/dotnet /usr/local/share/powershell; do
-            if [ -d "$path" ]; then sudo rm -rf -- "$path"; fi
-          done
-          df -h /
+        shell: bash
+        run: bash scripts/ci/prepare_ephemeral_runner_storage.sh
       - name: Build production scanner without legacy Recon
         run: |
           set -euo pipefail
