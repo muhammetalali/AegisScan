@@ -325,6 +325,27 @@ def _proof_from_http(
     )
 
 
+
+def _verified_model_summary(proofs: list[ProbeProof], *, state: str) -> dict[str, Any] | None:
+    """Local compact evidence only; this function never invokes a model."""
+    if state != 'confirmed':
+        return None
+    items: list[dict[str, Any]] = []
+    for proof in [p for p in proofs if p.exploitability_proven][:3]:
+        if not re.fullmatch(r'[0-9a-f]{64}', proof.evidence_sha256):
+            continue
+        item: dict[str, Any] = {'kind': proof.kind, 'proof_sha256': proof.evidence_sha256}
+        if proof.response_size_kib is not None and not proof.response_truncated:
+            item['response_size_kib'] = proof.response_size_kib
+        if proof.technology_hints:
+            item['unverified_technology_hints'] = list(proof.technology_hints[:7])
+        items.append(item)
+    if not items:
+        return None
+    summary = {'schema': 'aegis.verified-model-evidence.v1', 'state': 'confirmed', 'proofs': items}
+    return summary if len(json.dumps(summary, sort_keys=True, separators=(',', ':'))) <= 1600 else None
+
+
 def _semantic_browser_proof(finding: Any, probe: ProbeRequest, *, secrets_to_redact: tuple[str, ...]) -> ProbeProof:
     from django_project.evidence.models import Evidence
 
@@ -506,6 +527,7 @@ def run_offensive_validation(
             'proven_count': sum(1 for item in proofs if item.exploitability_proven) if not errors else 0,
         },
         'probes': [asdict(item) for item in proofs],
+        'model_evidence_summary': (_verified_model_summary(proofs, state=state) if not errors else None),
         'errors': errors,
         'runtime': {
             'live_session_opened': False,
