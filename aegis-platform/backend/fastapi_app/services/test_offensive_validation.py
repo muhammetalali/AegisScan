@@ -20,6 +20,7 @@ from fastapi_app.services.offensive_validation import (
     run_offensive_validation,
     _proof_from_http,
     _verified_model_summary,
+    _impact_assessment,
 )
 
 
@@ -267,3 +268,38 @@ def test_generic_access_denial_does_not_fabricate_waf_identity():
     result = _proof_from_http(probe, response, secrets_to_redact=())
     assert result.access_interference == 'access_restricted_unattributed'
     assert result.exploitability_proven is False
+
+
+
+def test_impact_rating_abstains_for_unproven_xss_or_waf_challenge():
+    probe = ProbeRequest(
+        kind='reflected-token', method='GET',
+        url='https://app.example/?aegis_validation_token=safe1234',
+    )
+    candidate = _proof_from_http(probe, HTTPProbeResponse(
+        status=403, headers={'server': 'Cloudflare'}, body='safe1234',
+        final_url=probe.url,
+    ), secrets_to_redact=())
+    rating = _impact_assessment([candidate], state='inconclusive')
+    assert rating['rating'] == 'unrated'
+    assert rating['business_impact_verified'] is False
+    assert rating['context_required'] is True
+
+
+def test_impact_rating_is_provisional_for_verified_external_redirect():
+    import hashlib
+    landing = 'https://aegis-validation.invalid/safe-redirect'
+    probe = ProbeRequest(
+        kind='redirect-control', method='GET',
+        url='https://app.example/redirect',
+        token_sha256=hashlib.sha256(landing.encode()).hexdigest(),
+    )
+    result = _proof_from_http(probe, HTTPProbeResponse(
+        status=302, headers={'location': landing}, body='',
+        final_url=probe.url,
+    ), secrets_to_redact=())
+    assert result.exploitability_proven is True
+    rating = _impact_assessment([result], state='confirmed')
+    assert rating['rating'] == 'low'
+    assert rating['business_impact_verified'] is False
+    assert rating['context_required'] is True

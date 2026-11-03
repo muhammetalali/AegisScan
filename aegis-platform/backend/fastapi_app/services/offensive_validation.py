@@ -343,6 +343,42 @@ def _proof_from_http(
 
 
 
+def _impact_assessment(proofs: list[ProbeProof], *, state: str) -> dict[str, Any]:
+    """Report observed impact conservatively; never infer account/data compromise.
+
+    This is a provisional technical rating based only on reproduced evidence,
+    not a CVSS score or a substitute for customer-specific business impact.
+    """
+    confirmed = [item for item in proofs if item.exploitability_proven] if state == 'confirmed' else []
+    if not confirmed:
+        return {
+            'rating': 'unrated',
+            'basis': 'No completed proof establishes technical impact.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    if any(item.kind == 'semantic-browser-transport' for item in confirmed):
+        return {
+            'rating': 'medium',
+            'basis': 'Browser evidence confirms a cleartext transport destination; sensitive data exposure has not been demonstrated.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    if any(item.kind == 'redirect-control' for item in confirmed):
+        return {
+            'rating': 'low',
+            'basis': 'An external redirect destination was controlled with an inert marker; phishing or authentication impact has not been demonstrated.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    return {
+        'rating': 'unrated',
+        'basis': 'The confirmed observation has no calibrated impact mapping.',
+        'business_impact_verified': False,
+        'context_required': True,
+    }
+
+
 def _verified_model_summary(proofs: list[ProbeProof], *, state: str) -> dict[str, Any] | None:
     """Local compact evidence only; this function never invokes a model."""
     if state != 'confirmed':
@@ -547,6 +583,7 @@ def run_offensive_validation(
             'proven_count': sum(1 for item in proofs if item.exploitability_proven) if not errors else 0,
         },
         'probes': [asdict(item) for item in proofs],
+        'impact_assessment': _impact_assessment(proofs, state=state),
         'model_evidence_summary': (_verified_model_summary(proofs, state=state) if not errors else None),
         'errors': errors,
         'runtime': {
