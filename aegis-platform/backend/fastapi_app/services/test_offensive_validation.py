@@ -18,6 +18,9 @@ from fastapi_app.services.offensive_validation import (
     HTTPProbeResponse,
     ProbeRequest,
     run_offensive_validation,
+    _proof_from_http,
+    _verified_model_summary,
+    _impact_assessment,
 )
 
 
@@ -153,3 +156,150 @@ def test_offensive_validation_rejects_unscoped_targets(monkeypatch):
 
     assert ValidationRun.objects.filter(finding=finding).count() == 0
     assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+
+def test_proof_emits_only_bounded_high_value_response_metadata():
+    probe = ProbeRequest(kind='http-reachability', method='GET', url='https://app.example/vulnerable')
+    response = HTTPProbeResponse(
+        status=200,
+        headers={
+            'server': 'cloudflare',
+            'x-powered-by': 'PHP/8.2',
+            'x-debug-token': 'must-never-appear',
+            'content-type': 'text/html',
+        },
+        body='<html>test page</html>',
+        final_url=probe.url,
+        response_bytes=4096,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.response_size_bytes == 4096
+    assert result.response_size_kib == 4.0
+    assert result.response_truncated is False
+    assert result.technology_hints == ('Cloudflare', 'PHP')
+    assert result.response_header_names == ('content-type',)
+    assert 'must-never-appear' not in str(result)
+    assert 'cloudflare' not in str(result.response_header_names)
+
+
+def test_truncated_or_head_responses_never_claim_exact_size():
+    get_probe = ProbeRequest(kind='http-reachability', method='GET', url='https://app.example/')
+    head_probe = ProbeRequest(kind='http-reachability', method='HEAD', url='https://app.example/')
+    truncated = HTTPProbeResponse(
+        status=200, headers={'server': 'nginx'}, body='bounded text',
+        final_url=get_probe.url, response_bytes=None, response_truncated=True,
+    )
+    proof = _proof_from_http(get_probe, truncated, secrets_to_redact=())
+    assert proof.response_size_bytes is None
+    assert proof.response_size_kib is None
+    assert proof.response_truncated is True
+    head = _proof_from_http(head_probe, HTTPProbeResponse(
+        status=200, headers={'content-length': '10000000'}, body='',
+        final_url=head_probe.url, response_bytes=0,
+    ), secrets_to_redact=())
+    assert head.response_size_bytes is None
+    assert head.response_size_kib is None
+
+
+def test_local_ai_evidence_gate_abstains_on_unproven_reflection():
+    probe = ProbeRequest(kind='reflected-token', method='GET',
+                         url='https://app.example/?aegis_validation_token=marker')
+    response = HTTPProbeResponse(
+        status=200, headers={'server': 'Cloudflare'},
+        body='marker', final_url=probe.url, response_bytes=6,
+    )
+    candidate = _proof_from_http(probe, response, secrets_to_redact=())
+    assert candidate.exploitability_proven is False
+    assert _verified_model_summary([candidate], state='inconclusive') is None
+    assert _verified_model_summary([candidate], state='confirmed') is None
+
+
+def test_local_ai_evidence_gate_omits_raw_request_and_response():
+    import hashlib
+    landing = 'https://aegis-validation.invalid/safe-test'
+    probe = ProbeRequest(
+        kind='redirect-control', method='GET',
+        url='https://app.example/redirect?opaque=private-marker',
+        token_sha256=hashlib.sha256(landing.encode()).hexdigest(),
+    )
+    response = HTTPProbeResponse(
+        status=302,
+        headers={'server': 'nginx', 'location': landing, 'x-opaque': 'private-value'},
+        body='private-response-body',
+        final_url=probe.url,
+        response_bytes=42,
+    )
+    verified = _proof_from_http(probe, response, secrets_to_redact=('private-marker',))
+    assert verified.exploitability_proven is True
+    summary = _verified_model_summary([verified], state='confirmed')
+    assert summary is not None
+    assert summary['schema'] == 'aegis.verified-model-evidence.v1'
+    assert summary['proofs'][0]['response_size_kib'] == round(42 / 1024, 3)
+    assert summary['proofs'][0]['unverified_technology_hints'] == ['Nginx']
+    text = json.dumps(summary)
+    for forbidden in ('private', 'https://', 'location', 'body', 'opaque'):
+        assert forbidden not in text
+
+
+
+def test_waf_signal_is_interference_not_exploit_or_safety_proof():
+    probe = ProbeRequest(kind='reflected-token', method='GET',
+                         url='https://app.example/search?aegis_validation_token=marker123')
+    response = HTTPProbeResponse(
+        status=403, headers={'server': 'cloudflare', 'cf-ray': 'sensitive-marker'},
+        body='Request blocked', final_url=probe.url,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.access_interference == 'possible_waf_challenge'
+    assert result.exploitability_proven is False
+    assert result.observation_confirmed is False
+    assert 'sensitive-marker' not in str(result)
+    assert _verified_model_summary([result], state='inconclusive') is None
+
+
+def test_generic_access_denial_does_not_fabricate_waf_identity():
+    probe = ProbeRequest(kind='http-reachability', method='HEAD',
+                         url='https://app.example/')
+    response = HTTPProbeResponse(
+        status=403, headers={'server': 'ordinary-app'}, body='',
+        final_url=probe.url,
+    )
+    result = _proof_from_http(probe, response, secrets_to_redact=())
+    assert result.access_interference == 'access_restricted_unattributed'
+    assert result.exploitability_proven is False
+
+
+
+def test_impact_rating_abstains_for_unproven_xss_or_waf_challenge():
+    probe = ProbeRequest(
+        kind='reflected-token', method='GET',
+        url='https://app.example/?aegis_validation_token=safe1234',
+    )
+    candidate = _proof_from_http(probe, HTTPProbeResponse(
+        status=403, headers={'server': 'Cloudflare'}, body='safe1234',
+        final_url=probe.url,
+    ), secrets_to_redact=())
+    rating = _impact_assessment([candidate], state='inconclusive')
+    assert rating['rating'] == 'unrated'
+    assert rating['business_impact_verified'] is False
+    assert rating['context_required'] is True
+
+
+def test_impact_rating_is_provisional_for_verified_external_redirect():
+    import hashlib
+    landing = 'https://aegis-validation.invalid/safe-redirect'
+    probe = ProbeRequest(
+        kind='redirect-control', method='GET',
+        url='https://app.example/redirect',
+        token_sha256=hashlib.sha256(landing.encode()).hexdigest(),
+    )
+    result = _proof_from_http(probe, HTTPProbeResponse(
+        status=302, headers={'location': landing}, body='',
+        final_url=probe.url,
+    ), secrets_to_redact=())
+    assert result.exploitability_proven is True
+    rating = _impact_assessment([result], state='confirmed')
+    assert rating['rating'] == 'low'
+    assert rating['business_impact_verified'] is False
+    assert rating['context_required'] is True

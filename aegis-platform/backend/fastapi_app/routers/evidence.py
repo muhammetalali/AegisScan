@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
+
 from typing import Any, Optional
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from ..core.dependencies import get_current_user, project_access_q
@@ -109,3 +114,84 @@ async def get_evidence(evidence_id: str, user=Depends(get_current_user)):
     if not item:
         raise HTTPException(status_code=404, detail='Evidence not found')
     return _serialize(item)
+
+
+_MAX_VISUAL_BYTES = 1024 * 1024
+_PNG_MAGIC = bytes.fromhex('89504e470d0a1a0a')
+
+
+def _visual_png_from_evidence(item: Any) -> bytes | None:
+    """Validate a privately retained browser image without implying XSS execution."""
+    source = getattr(item, 'source', None)
+    if source not in {'aegis-browser-security', 'aegis-browser-spa-discovery'} or getattr(item, 'evidence_type', None) != 'scanner_output':
+        return None
+    spa = source == 'aegis-browser-spa-discovery'
+    expected_schema = 'aegis.browser-spa-discovery.v1' if spa else 'aegis.browser-security.v1'
+    expected_family = 'chromium' if spa else 'firefox'
+    expected_observation_kind = 'browser-spa-summary' if spa else 'browser-render-verification'
+    raw = getattr(item, 'raw_output', None)
+    if not isinstance(raw, str) or not raw or len(raw) > 4 * 1024 * 1024:
+        return None
+    if hashlib.sha256(raw.encode('utf-8', errors='replace')).hexdigest() != getattr(item, 'sha256', None):
+        return None
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(body, dict) or body.get('schema') != expected_schema:
+        return None
+    artifacts = body.get('visual_artifacts')
+    observations = body.get('observations')
+    if not isinstance(artifacts, list) or not isinstance(observations, list):
+        return None
+    for artifact in artifacts[:2]:
+        if not isinstance(artifact, dict) or artifact.get('kind') != 'browser-render-snapshot':
+            continue
+        if artifact.get('media_type') != 'image/png' or artifact.get('browser_family') != expected_family:
+            continue
+        if spa and artifact.get('capture_method') != 'same-cdp-session':
+            continue
+        encoded = artifact.get('png_base64')
+        expected_sha = artifact.get('sha256')
+        if not isinstance(encoded, str) or len(encoded) > (_MAX_VISUAL_BYTES * 4 // 3 + 8):
+            continue
+        if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+            continue
+        try:
+            png = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            continue
+        if not (32 <= len(png) <= _MAX_VISUAL_BYTES and png.startswith(_PNG_MAGIC)
+                and png[12:16] == b'IHDR' and len(png) == artifact.get('size_bytes')):
+            continue
+        if hashlib.sha256(png).hexdigest() != expected_sha:
+            continue
+        if not any(
+            isinstance(obs, dict) and obs.get('kind') == expected_observation_kind
+            and obs.get('screenshot_sha256') == expected_sha
+            and (obs.get('visual_proof_available') is True if spa
+                 else obs.get('browser_family') == 'firefox' and obs.get('screenshot_retained') is True)
+            for obs in observations[:2000]
+        ):
+            continue
+        return png
+    return None
+
+
+@router.get('/{evidence_id}/visual', response_class=Response)
+async def get_visual_evidence(evidence_id: str, user=Depends(get_current_user)):
+    item = await _get_evidence(evidence_id, str(user.get('user_id')))
+    if item is None:
+        raise HTTPException(status_code=404, detail='Evidence not found')
+    png = _visual_png_from_evidence(item)
+    if png is None:
+        raise HTTPException(status_code=404, detail='Verified visual evidence unavailable')
+    return Response(
+        content=png,
+        media_type='image/png',
+        headers={
+            'Cache-Control': 'private, no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+        },
+    )

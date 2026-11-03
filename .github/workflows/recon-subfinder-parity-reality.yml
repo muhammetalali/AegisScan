@@ -141,6 +141,10 @@ jobs:
       - name: Prove exact checkout
         run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
 
+      - name: Reclaim unused hosted-runner SDKs and verify disk capacity
+        shell: bash
+        run: bash scripts/ci/prepare_ephemeral_runner_storage.sh
+
       - name: Build exact legacy scanner runtime
         shell: bash
         run: |

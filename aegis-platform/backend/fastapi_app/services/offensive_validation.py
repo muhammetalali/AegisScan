@@ -53,6 +53,8 @@ class HTTPProbeResponse:
     headers: dict[str, str]
     body: str
     final_url: str
+    response_bytes: int | None = None
+    response_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,11 @@ class ProbeProof:
     response_preview: str = ''
     observation_confirmed: bool = False
     source_evidence_id: str = ''
+    response_size_bytes: int | None = None
+    response_size_kib: float | None = None
+    response_truncated: bool = False
+    technology_hints: tuple[str, ...] = ()
+    access_interference: str = 'none'
 
 
 HttpClient = Callable[[ProbeRequest], HTTPProbeResponse]
@@ -143,8 +150,13 @@ def _default_http_client(probe: ProbeRequest) -> HTTPProbeResponse:
     finally:
         connection.close()
         sock.close()
+    truncated = len(raw_body) > MAX_BODY_BYTES
     body = raw_body[:MAX_BODY_BYTES].decode('utf-8', errors='ignore')
-    return HTTPProbeResponse(status=status, headers=headers, body=body, final_url=probe.url)
+    return HTTPProbeResponse(
+        status=status, headers=headers, body=body, final_url=probe.url,
+        response_bytes=len(raw_body) if method == 'GET' and not truncated else None,
+        response_truncated=truncated,
+    )
 
 
 def _candidate_url(finding: Any) -> str:
@@ -241,6 +253,40 @@ def build_validation_plan(finding: Any, *, token: str | None = None) -> list[Pro
     return plan
 
 
+# Only bounded, non-sensitive self-declared signals; never treat these as verified stack facts.
+_TECHNOLOGY_SIGNALS = (
+    ('Cloudflare', re.compile(r'\bcloudflare\b', re.I)),
+    ('Nginx', re.compile(r'\bnginx\b', re.I)),
+    ('Apache', re.compile(r'\bapache\b', re.I)),
+    ('PHP', re.compile(r'\bphp(?:/|\b)', re.I)),
+    ('ASP.NET', re.compile(r'\basp\.net\b', re.I)),
+    ('Express', re.compile(r'\bexpress\b', re.I)),
+    ('WordPress', re.compile(r'\bwordpress\b', re.I)),
+)
+
+
+def _technology_hints(headers: dict[str, str]) -> tuple[str, ...]:
+    # Avoid passing raw server/header data (including secrets and attacker text)
+    # to reports or paid language models.
+    claims = ' '.join(str(headers.get(name, ''))[:120] for name in ('server', 'x-powered-by', 'x-generator'))
+    return tuple(label for label, pattern in _TECHNOLOGY_SIGNALS if pattern.search(claims))
+
+
+def _access_interference(status: int, headers: dict[str, str]) -> str:
+    """Classify access interference only; it is never proof of WAF effectiveness.
+
+    A challenge can mask an otherwise real issue. Report unknown rather than
+    interpreting a blocked probe as a negative vulnerability test.
+    """
+    if status not in {403, 406, 429, 503}:
+        return 'none'
+    declared = ' '.join(str(headers.get(key, ''))[:80].lower() for key in
+                        ('server', 'x-sucuri-id', 'x-akamai-request-id', 'cf-ray'))
+    if any(marker in declared for marker in ('cloudflare', 'sucuri', 'akamai')):
+        return 'possible_waf_challenge'
+    return 'access_restricted_unattributed'
+
+
 def _proof_from_http(
     probe: ProbeRequest,
     response: HTTPProbeResponse,
@@ -285,7 +331,72 @@ def _proof_from_http(
         response_header_names=tuple(sorted(set(headers) & {'content-type', 'location', 'content-security-policy', 'strict-transport-security'})),
         response_preview='',
         observation_confirmed=bool(probe.kind == 'reflected-token' and token and token in body),
+        response_size_bytes=(response.response_bytes if probe.method == 'GET'
+                             and not response.response_truncated and response.response_bytes is not None else None),
+        response_size_kib=(round(response.response_bytes / 1024, 3)
+                           if probe.method == 'GET' and not response.response_truncated
+                           and response.response_bytes is not None else None),
+        response_truncated=response.response_truncated,
+        technology_hints=_technology_hints(headers),
+        access_interference=_access_interference(response.status, headers),
     )
+
+
+
+def _impact_assessment(proofs: list[ProbeProof], *, state: str) -> dict[str, Any]:
+    """Report observed impact conservatively; never infer account/data compromise.
+
+    This is a provisional technical rating based only on reproduced evidence,
+    not a CVSS score or a substitute for customer-specific business impact.
+    """
+    confirmed = [item for item in proofs if item.exploitability_proven] if state == 'confirmed' else []
+    if not confirmed:
+        return {
+            'rating': 'unrated',
+            'basis': 'No completed proof establishes technical impact.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    if any(item.kind == 'semantic-browser-transport' for item in confirmed):
+        return {
+            'rating': 'medium',
+            'basis': 'Browser evidence confirms a cleartext transport destination; sensitive data exposure has not been demonstrated.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    if any(item.kind == 'redirect-control' for item in confirmed):
+        return {
+            'rating': 'low',
+            'basis': 'An external redirect destination was controlled with an inert marker; phishing or authentication impact has not been demonstrated.',
+            'business_impact_verified': False,
+            'context_required': True,
+        }
+    return {
+        'rating': 'unrated',
+        'basis': 'The confirmed observation has no calibrated impact mapping.',
+        'business_impact_verified': False,
+        'context_required': True,
+    }
+
+
+def _verified_model_summary(proofs: list[ProbeProof], *, state: str) -> dict[str, Any] | None:
+    """Local compact evidence only; this function never invokes a model."""
+    if state != 'confirmed':
+        return None
+    items: list[dict[str, Any]] = []
+    for proof in [p for p in proofs if p.exploitability_proven][:3]:
+        if not re.fullmatch(r'[0-9a-f]{64}', proof.evidence_sha256):
+            continue
+        item: dict[str, Any] = {'kind': proof.kind, 'proof_sha256': proof.evidence_sha256}
+        if proof.response_size_kib is not None and not proof.response_truncated:
+            item['response_size_kib'] = proof.response_size_kib
+        if proof.technology_hints:
+            item['unverified_technology_hints'] = list(proof.technology_hints[:7])
+        items.append(item)
+    if not items:
+        return None
+    summary = {'schema': 'aegis.verified-model-evidence.v1', 'state': 'confirmed', 'proofs': items}
+    return summary if len(json.dumps(summary, sort_keys=True, separators=(',', ':'))) <= 1600 else None
 
 
 def _semantic_browser_proof(finding: Any, probe: ProbeRequest, *, secrets_to_redact: tuple[str, ...]) -> ProbeProof:
@@ -448,7 +559,10 @@ def run_offensive_validation(
             break
 
     proven = not errors and any(item.exploitability_proven for item in proofs)
-    can_disprove = not errors and any(item.kind == 'redirect-control' and 200 <= item.status < 400 for item in proofs)
+    can_disprove = not errors and any(
+        item.kind == 'redirect-control' and 200 <= item.status < 400
+        and item.access_interference == 'none' for item in proofs
+    )
     state = 'confirmed' if proven else 'not_reproduced' if can_disprove else 'inconclusive'
     confidence = 'high' if proven else 'medium' if proofs else 'low'
     successful = bool(proofs) and not errors
@@ -469,6 +583,8 @@ def run_offensive_validation(
             'proven_count': sum(1 for item in proofs if item.exploitability_proven) if not errors else 0,
         },
         'probes': [asdict(item) for item in proofs],
+        'impact_assessment': _impact_assessment(proofs, state=state),
+        'model_evidence_summary': (_verified_model_summary(proofs, state=state) if not errors else None),
         'errors': errors,
         'runtime': {
             'live_session_opened': False,

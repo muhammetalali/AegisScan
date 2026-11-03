@@ -255,6 +255,19 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 'inner_html_write_count': _positive_int(item.get('inner_html_write_count'), 1000000),
                 'insert_adjacent_html_count': _positive_int(item.get('insert_adjacent_html_count'), 1000000),
                 'document_write_count': _positive_int(item.get('document_write_count'), 1000000),
+                'source_marker_present': item.get('source_marker_present') is True,
+                'source_to_sink_flow_candidate': item.get('source_to_sink_flow_candidate') is True,
+                'source_to_sink_kinds': [
+                    kind for kind in ('innerHTML', 'insertAdjacentHTML', 'document.write')
+                    if kind in (item.get('source_to_sink_kinds') or [])[:3]
+                ] if isinstance(item.get('source_to_sink_kinds'), list) else [],
+                'javascript_execution_verified': False,
+                'visual_proof_available': item.get('visual_proof_available') is True,
+                'screenshot_sha256': (
+                    item['screenshot_sha256'] if isinstance(item.get('screenshot_sha256'), str)
+                    and re.fullmatch(r'[0-9a-f]{64}', item['screenshot_sha256']) else ''
+                ),
+                'screenshot_bytes': _positive_int(item.get('screenshot_bytes'), 256 * 1024),
                 'blocked_websocket_count': _positive_int(item.get('blocked_websocket_count'), 1000000),
                 'blocked_webtransport_count': _positive_int(item.get('blocked_webtransport_count'), 1000000),
                 'dom_clobbering_count': _positive_int(item.get('dom_clobbering_count'), 1000000),
@@ -745,11 +758,59 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     elif capability_id == 'browser.dom-snapshot':
         data = _json(raw)
         if isinstance(data, dict):
-            for item in data.get('observations', []):
-                if isinstance(item, dict):
-                    safe = dict(item)
-                    safe['kind'] = str(safe.get('kind') or 'browser-dom-security-snapshot')[:100]
-                    observations.append(safe)
+            # Strict projection: this is a report/AI-facing summary, not the
+            # private raw Evidence store. An arbitrary nested object or
+            # base64 image must never cross into normalized observations.
+            allowed_fields = {
+                'browser-dom-security-snapshot': {
+                    'title', 'browser_family', 'script_count', 'inline_script_count',
+                    'iframe_count', 'form_count', 'password_field_count',
+                    'meta_csp_present', 'base_tag_present', 'resource_host_count',
+                    'third_party_resource_hosts', 'mixed_content_urls',
+                    'insecure_form_actions', 'link_rel_values',
+                },
+                'browser-render-verification': {
+                    'browser_family', 'rendered', 'screenshot_sha256',
+                    'screenshot_bytes', 'screenshot_retained',
+                    'javascript_execution_verified',
+                },
+            }
+            number_fields = {
+                'script_count', 'inline_script_count', 'iframe_count', 'form_count',
+                'password_field_count', 'resource_host_count', 'screenshot_bytes',
+            }
+            boolean_fields = {
+                'meta_csp_present', 'base_tag_present', 'rendered',
+                'screenshot_retained', 'javascript_execution_verified',
+            }
+            list_fields = {
+                'third_party_resource_hosts', 'mixed_content_urls',
+                'insecure_form_actions', 'link_rel_values',
+            }
+            for item in data.get('observations', [])[:20] if isinstance(data.get('observations'), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get('kind') or 'browser-dom-security-snapshot')
+                if kind not in allowed_fields:
+                    continue
+                safe: dict[str, Any] = {'kind': kind}
+                for key in allowed_fields[kind]:
+                    value = item.get(key)
+                    if key in number_fields:
+                        try:
+                            safe[key] = max(0, min(int(value), 1000000))
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                    elif key in boolean_fields:
+                        safe[key] = value is True
+                    elif key in list_fields and isinstance(value, list):
+                        safe[key] = [v[:2048] for v in value[:100] if isinstance(v, str)]
+                    elif key == 'screenshot_sha256' and isinstance(value, str):
+                        if re.fullmatch(r'[0-9a-f]{64}', value):
+                            safe[key] = value
+                    elif key in {'title', 'browser_family'} and isinstance(value, str):
+                        safe[key] = value[:512 if key == 'title' else 32]
+                observations.append(safe)
             if not observations and data.get('error'):
                 observations.append({'kind': 'browser-error', 'summary': str(data['error'])[:2000]})
 

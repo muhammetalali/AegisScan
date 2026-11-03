@@ -155,6 +155,10 @@ jobs:
           print('RAW_L2_COMPOSE_BOUNDARY=PASS')
           PY
 
+      - name: Reclaim unused hosted-runner SDKs and verify disk capacity
+        shell: bash
+        run: bash scripts/ci/prepare_ephemeral_runner_storage.sh
+
       - name: Build real isolated scanner stack
         working-directory: aegis-platform
         shell: bash

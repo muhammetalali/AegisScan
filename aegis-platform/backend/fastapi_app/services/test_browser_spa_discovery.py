@@ -630,3 +630,59 @@ async def test_scoped_socks_proxy_bound_origin_allows_exact_origin_only(monkeypa
         await proxy.close()
         upstream.close()
         await upstream.wait_closed()
+
+
+
+def test_inert_dom_source_sink_marker_contract_is_passive_and_bounded():
+    from fastapi_app.services.browser_spa_discovery import _instrumentation_script
+    script = _instrumentation_script('https://app.example.test')
+    assert 'aegis_validation_token' in script
+    assert 'sourceSinkMatchKinds' in script
+    assert "noteSourceSink('innerHTML', value)" in script
+    assert "noteSourceSink('insertAdjacentHTML', args[1])" in script
+    assert "noteSourceSink('document.write', part)" in script
+    assert "sourceMarkerPresent" in script
+    assert 'sourceSinkMatchKinds.push(kind)' in script
+
+
+def test_dom_source_sink_normalization_returns_labels_not_marker_values():
+    record = {
+        'schema': 'aegis.browser-spa-discovery.v1',
+        'observations': [{
+            'kind': 'browser-spa-summary',
+            'source_marker_present': True,
+            'source_to_sink_flow_candidate': True,
+            'source_to_sink_kinds': ['innerHTML', 'invalid', 'document.write'],
+            'javascript_execution_verified': True,
+            'cookie': 'sensitive',
+        }],
+    }
+    result = normalize_native_output('browser.spa-discovery', json.dumps(record))
+    observation = next(x for x in result['observations'] if x['kind'] == 'browser-spa-summary')
+    assert observation['source_marker_present'] is True
+    assert observation['source_to_sink_flow_candidate'] is True
+    assert observation['source_to_sink_kinds'] == ['innerHTML', 'document.write']
+    assert observation['javascript_execution_verified'] is False
+    assert 'sensitive' not in str(observation)
+
+
+
+def test_cdp_visual_artifact_accepts_only_bounded_png_and_records_same_session():
+    import base64
+    import hashlib
+    from fastapi_app.services.browser_spa_discovery import _bounded_cdp_visual_artifact
+    png = base64.b64decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+        'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg=='
+    )
+    encoded = base64.b64encode(png).decode('ascii')
+    artifact = _bounded_cdp_visual_artifact({'data': encoded})
+    assert artifact is not None
+    assert artifact['capture_method'] == 'same-cdp-session'
+    assert artifact['browser_family'] == 'chromium'
+    assert artifact['size_bytes'] == len(png)
+    assert artifact['sha256'] == hashlib.sha256(png).hexdigest()
+    assert _bounded_cdp_visual_artifact({'data': 'not valid base64!'}) is None
+    assert _bounded_cdp_visual_artifact({'data': base64.b64encode(b'not a PNG').decode()}) is None
+    assert _bounded_cdp_visual_artifact({'data': 'A' * 400000}) is None
+    assert _bounded_cdp_visual_artifact({'data': None}) is None

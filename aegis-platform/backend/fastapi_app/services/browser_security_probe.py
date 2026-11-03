@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -17,6 +18,8 @@ from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 SCHEMA = 'aegis.browser-security.v1'
+MAX_PRIVATE_VISUAL_BYTES = 1024 * 1024
+PNG_MAGIC = bytes.fromhex('89504e470d0a1a0a')
 BrowserChoice = Literal['auto', 'chromium', 'firefox']
 
 
@@ -243,13 +246,29 @@ def _capture_with_firefox(
     )
     if completed.returncode != 0 or not screenshot_path.is_file():
         raise RuntimeError((completed.stderr or completed.stdout or 'headless Firefox failed')[-12000:])
-    screenshot = screenshot_path.read_bytes()
+    file_size = screenshot_path.stat().st_size
+    private_png = b''
+    if 32 <= file_size <= MAX_PRIVATE_VISUAL_BYTES:
+        candidate = screenshot_path.read_bytes()
+        if candidate.startswith(PNG_MAGIC) and candidate[12:16] == b'IHDR':
+            private_png = candidate
+    screenshot_sha = hashlib.sha256(private_png).hexdigest() if private_png else ''
     dom, truncated = _fetch_dom(url, max_dom_bytes, max(10, (max(0, virtual_time_budget_ms) // 1000) + 10))
     log = '\n'.join(part for part in (completed.stdout, completed.stderr) if part)
     return dom, truncated, 'firefox-headless-render-plus-dom-fetch', log, {
         'rendered': True,
-        'screenshot_sha256': hashlib.sha256(screenshot).hexdigest(),
-        'screenshot_bytes': len(screenshot),
+        'screenshot_sha256': screenshot_sha,
+        'screenshot_bytes': file_size,
+        'screenshot_retained': bool(private_png),
+        'javascript_execution_verified': False,
+        'visual_artifact': ({
+            'kind': 'browser-render-snapshot',
+            'browser_family': 'firefox',
+            'media_type': 'image/png',
+            'sha256': screenshot_sha,
+            'size_bytes': file_size,
+            'png_base64': base64.b64encode(private_png).decode('ascii'),
+        } if private_png else None),
     }
 
 
@@ -312,7 +331,9 @@ def _run_browser(
         max_dom_bytes,
         browser_choice,
     )
-    return analyze_dom(
+    # The artifact stays in raw scan evidence; summary/normalized metadata remains small.
+    visual_artifact = render_evidence.pop('visual_artifact', None) if render_evidence else None
+    result = analyze_dom(
         url,
         dom,
         truncated,
@@ -324,13 +345,18 @@ def _run_browser(
         log,
         render_evidence,
     )
+    if visual_artifact:
+        result['visual_artifacts'] = [visual_artifact]
+    return result
 
 
 def _combine_runs(url: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
     observations: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    artifacts: list[dict[str, Any]] = []
     for run in runs:
         observations.extend(run.get('observations', []))
+        artifacts.extend(run.get('visual_artifacts', [])[:1])
         summaries.append({
             'browser': run.get('browser'),
             'browser_family': run.get('browser_family'),
@@ -345,6 +371,7 @@ def _combine_runs(url: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
         'browser_engines': [str(run.get('browser_family')) for run in runs],
         'browser_runs': summaries,
         'observations': observations,
+        'visual_artifacts': artifacts[:2],
     }
 
 

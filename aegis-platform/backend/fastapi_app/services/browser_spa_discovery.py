@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import asyncio
 import ipaddress
 import json
@@ -24,6 +27,34 @@ from fastapi_app.services.scope_authorization import require_authorized_target
 from fastapi_app.services.web_messaging_semantics import assess_web_messaging
 
 _SCHEMA = 'aegis.browser-spa-discovery.v1'
+_MAX_PRIVATE_CDP_IMAGE_BYTES = 256 * 1024
+_PNG_SIGNATURE = bytes.fromhex('89504e470d0a1a0a')
+
+
+def _bounded_cdp_visual_artifact(response: Any) -> dict[str, Any] | None:
+    # Raw proof remains in Evidence. Public normalized projections must not
+    # contain this base64 content; the caller records only its SHA-256.
+    if not isinstance(response, dict):
+        return None
+    encoded = response.get('data')
+    if not isinstance(encoded, str) or len(encoded) > (_MAX_PRIVATE_CDP_IMAGE_BYTES * 4 // 3 + 8):
+        return None
+    try:
+        image = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if not (32 <= len(image) <= _MAX_PRIVATE_CDP_IMAGE_BYTES
+            and image.startswith(_PNG_SIGNATURE) and image[12:16] == b'IHDR'):
+        return None
+    return {
+        'kind': 'browser-render-snapshot',
+        'browser_family': 'chromium',
+        'media_type': 'image/png',
+        'capture_method': 'same-cdp-session',
+        'sha256': hashlib.sha256(image).hexdigest(),
+        'size_bytes': len(image),
+        'png_base64': encoded,
+    }
 _MAX_SESSION_BYTES = 65536
 _MAX_STORAGE_ENTRIES = 64
 _MAX_COOKIES = 64
@@ -506,6 +537,8 @@ _INSTRUMENTATION_SCRIPT = r"""
     postMessagesReceived: 0,
     webMessageRecords: [],
     innerHTMLWrites: 0,
+    sourceSinkMatchKinds: [],
+    sourceMarkerPresent: false,
     insertAdjacentHTMLCalls: 0,
     documentWriteCalls: 0,
     objectPrototypeBaseline: Object.getOwnPropertyNames(Object.prototype),
@@ -513,6 +546,23 @@ _INSTRUMENTATION_SCRIPT = r"""
     blockedWebTransportCount: 0
   };
   Object.defineProperty(globalThis, '__aegisRuntimeSignals', {value: state, configurable: false});
+  // Correlate ONLY an explicitly supplied, inert canary with DOM sink calls.
+  // No payload creation, no arbitrary secret logging, and no JS execution claim.
+  let inertMarker = null;
+  try {
+    const supplied = new URL(location.href).searchParams.get('aegis_validation_token');
+    if (typeof supplied === 'string' && /^aegis-[a-zA-Z0-9_-]{8,48}$/.test(supplied)) {
+      inertMarker = supplied;
+      state.sourceMarkerPresent = true;
+    }
+  } catch (_) {}
+  const noteSourceSink = (kind, value) => {
+    if (!inertMarker || typeof value !== 'string' || value.length > 32768) return;
+    if (!value.includes(inertMarker)) return;
+    if (!state.sourceSinkMatchKinds.includes(kind) && state.sourceSinkMatchKinds.length < 3) {
+      state.sourceSinkMatchKinds.push(kind);
+    }
+  };
   const dataType = (value) => {
     if (value === null) return 'null';
     if (Array.isArray(value)) return 'array';
@@ -615,6 +665,7 @@ _INSTRUMENTATION_SCRIPT = r"""
         get: descriptor.get,
         set(value) {
           state.innerHTMLWrites += 1;
+          noteSourceSink('innerHTML', value);
           return descriptor.set.call(this, value);
         }
       });
@@ -624,6 +675,7 @@ _INSTRUMENTATION_SCRIPT = r"""
     const originalInsert = Element.prototype.insertAdjacentHTML;
     Element.prototype.insertAdjacentHTML = function(...args) {
       state.insertAdjacentHTMLCalls += 1;
+      noteSourceSink('insertAdjacentHTML', args[1]);
       return originalInsert.apply(this, args);
     };
   } catch (_) {}
@@ -631,6 +683,7 @@ _INSTRUMENTATION_SCRIPT = r"""
     const originalWrite = document.write.bind(document);
     document.write = function(...args) {
       state.documentWriteCalls += 1;
+      for (const part of args.slice(0, 16)) noteSourceSink('document.write', part);
       return originalWrite(...args);
     };
   } catch (_) {}
@@ -708,6 +761,8 @@ _RUNTIME_SUMMARY_EXPRESSION = r"""
       innerHTMLWrites: Number(signals.innerHTMLWrites || 0),
       insertAdjacentHTMLCalls: Number(signals.insertAdjacentHTMLCalls || 0),
       documentWriteCalls: Number(signals.documentWriteCalls || 0),
+      sourceMarkerPresent: signals.sourceMarkerPresent === true,
+      sourceSinkMatchKinds: Array.isArray(signals.sourceSinkMatchKinds) ? signals.sourceSinkMatchKinds.slice(0, 3) : [],
       blockedWebSocketCount: Number(signals.blockedWebSocketCount || 0),
       blockedWebTransportCount: Number(signals.blockedWebTransportCount || 0)
     }
@@ -749,6 +804,7 @@ async def discover(
     request_meta: dict[str, dict[str, Any]] = {}
     truncated = False
     blocked_out_of_scope_requests = 0
+    visual_artifact: dict[str, Any] | None = None
 
     try:
         process = subprocess.Popen(
@@ -945,6 +1001,19 @@ async def discover(
             )
             runtime_summary = runtime_value if isinstance(runtime_value, dict) else {}
 
+            # Capture within THIS SAME CDP page session, after the runtime
+            # observation. This is render attestation, never an XSS-execution
+            # verdict. A failure cannot fabricate an image or fail the scan.
+            try:
+                screenshot = await cdp.call(
+                    'Page.captureScreenshot',
+                    {'format': 'png', 'fromSurface': True, 'captureBeyondViewport': False},
+                    timeout=10,
+                )
+                visual_artifact = _bounded_cdp_visual_artifact(screenshot)
+            except (ValueError, binascii.Error, RuntimeError, TimeoutError, asyncio.TimeoutError):
+                pass
+
             try:
                 cookie_result = await cdp.call('Network.getAllCookies')
                 raw_cookies = (
@@ -1106,6 +1175,16 @@ async def discover(
             'inner_html_write_count': int(signals.get('innerHTMLWrites') or 0),
             'insert_adjacent_html_count': int(signals.get('insertAdjacentHTMLCalls') or 0),
             'document_write_count': int(signals.get('documentWriteCalls') or 0),
+            'source_marker_present': signals.get('sourceMarkerPresent') is True,
+            'source_to_sink_flow_candidate': bool(signals.get('sourceSinkMatchKinds')),
+            'source_to_sink_kinds': [
+                kind for kind in ('innerHTML', 'insertAdjacentHTML', 'document.write')
+                if kind in (signals.get('sourceSinkMatchKinds') or [])[:3]
+            ],
+            'javascript_execution_verified': False,
+            'visual_proof_available': visual_artifact is not None,
+            'screenshot_sha256': visual_artifact['sha256'] if visual_artifact else '',
+            'screenshot_bytes': visual_artifact['size_bytes'] if visual_artifact else 0,
             'blocked_websocket_count': int(signals.get('blockedWebSocketCount') or 0),
             'blocked_webtransport_count': int(signals.get('blockedWebTransportCount') or 0),
             'dom_clobbering_count': int(runtime_summary.get('domClobberingCount') or 0),
@@ -1129,6 +1208,7 @@ async def discover(
             'identity_ref': identity_ref,
             'observation_count': min(len(observations), max_events + 1000),
             'observations': observations[: max_events + 1000],
+            'visual_artifacts': [visual_artifact] if visual_artifact else [],
         }
     finally:
         if process is not None:
