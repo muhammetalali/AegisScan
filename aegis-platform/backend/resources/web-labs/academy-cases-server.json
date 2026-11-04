@@ -1,0 +1,1170 @@
+{
+  "schema": "aegis.web-labs.academy-case-index.v1",
+  "group": "server-side",
+  "source_kind": "third-party-research-index",
+  "source_revision": "1381a80712a5904f9de2ae2a2c94560e6e60eec8",
+  "source_date": "2026-08-22",
+  "verified_with_academy": false,
+  "items": [
+    {
+      "id": "sql-injection-01",
+      "category": "sql-injection",
+      "ordinal": 1,
+      "title": "SQL injection vulnerability in WHERE clause allowing retrieval of hidden data",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-02",
+      "category": "sql-injection",
+      "ordinal": 2,
+      "title": "SQL injection vulnerability allowing login bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-03",
+      "category": "sql-injection",
+      "ordinal": 3,
+      "title": "SQL injection UNION attack, determining the number of columns returned by the query",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-04",
+      "category": "sql-injection",
+      "ordinal": 4,
+      "title": "SQL injection UNION attack, finding a column containing text",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-05",
+      "category": "sql-injection",
+      "ordinal": 5,
+      "title": "SQL injection UNION attack, retrieving data from other tables",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-06",
+      "category": "sql-injection",
+      "ordinal": 6,
+      "title": "SQL injection UNION attack, retrieving multiple values in a single column",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-07",
+      "category": "sql-injection",
+      "ordinal": 7,
+      "title": "SQL injection attack, querying the database type and version on Oracle",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-08",
+      "category": "sql-injection",
+      "ordinal": 8,
+      "title": "SQL injection attack, querying the database type and version on MySQL and Microsoft",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-09",
+      "category": "sql-injection",
+      "ordinal": 9,
+      "title": "SQL injection attack, listing the database contents on non-Oracle databases",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-10",
+      "category": "sql-injection",
+      "ordinal": 10,
+      "title": "SQL injection attack, listing the database contents on Oracle",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-11",
+      "category": "sql-injection",
+      "ordinal": 11,
+      "title": "Blind SQL injection with conditional responses",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-12",
+      "category": "sql-injection",
+      "ordinal": 12,
+      "title": "Blind SQL injection with conditional errors",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-13",
+      "category": "sql-injection",
+      "ordinal": 13,
+      "title": "Visible error-based SQL injection",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-14",
+      "category": "sql-injection",
+      "ordinal": 14,
+      "title": "Blind SQL injection with time delays",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-15",
+      "category": "sql-injection",
+      "ordinal": 15,
+      "title": "Blind SQL injection with time delays and information retrieval",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-16",
+      "category": "sql-injection",
+      "ordinal": 16,
+      "title": "Blind SQL injection with out-of-band interaction",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-17",
+      "category": "sql-injection",
+      "ordinal": 17,
+      "title": "Blind SQL injection with out-of-band data exfiltration",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "sql-injection-18",
+      "category": "sql-injection",
+      "ordinal": 18,
+      "title": "SQL injection with filter bypass via XML encoding",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/sql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-01",
+      "category": "authentication",
+      "ordinal": 1,
+      "title": "Username enumeration via different responses",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-02",
+      "category": "authentication",
+      "ordinal": 2,
+      "title": "2FA simple bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-03",
+      "category": "authentication",
+      "ordinal": 3,
+      "title": "Password reset broken logic",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-04",
+      "category": "authentication",
+      "ordinal": 4,
+      "title": "Username enumeration via subtly different responses",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-05",
+      "category": "authentication",
+      "ordinal": 5,
+      "title": "Username enumeration via response timing",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-06",
+      "category": "authentication",
+      "ordinal": 6,
+      "title": "Broken brute-force protection, IP block",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-07",
+      "category": "authentication",
+      "ordinal": 7,
+      "title": "Username enumeration via account lock",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-08",
+      "category": "authentication",
+      "ordinal": 8,
+      "title": "2FA broken logic",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-09",
+      "category": "authentication",
+      "ordinal": 9,
+      "title": "Brute-forcing a stay-logged-in cookie",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-10",
+      "category": "authentication",
+      "ordinal": 10,
+      "title": "Offline password cracking",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-11",
+      "category": "authentication",
+      "ordinal": 11,
+      "title": "Password reset poisoning via middleware",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-12",
+      "category": "authentication",
+      "ordinal": 12,
+      "title": "Password brute-force via password change",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-13",
+      "category": "authentication",
+      "ordinal": 13,
+      "title": "Broken brute-force protection, multiple credentials per request",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "authentication-14",
+      "category": "authentication",
+      "ordinal": 14,
+      "title": "2FA bypass using a brute-force attack",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/authentication/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-01",
+      "category": "path-traversal",
+      "ordinal": 1,
+      "title": "File path traversal, simple case",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-02",
+      "category": "path-traversal",
+      "ordinal": 2,
+      "title": "File path traversal, traversal sequences blocked with absolute path bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-03",
+      "category": "path-traversal",
+      "ordinal": 3,
+      "title": "File path traversal, traversal sequences stripped non-recursively",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-04",
+      "category": "path-traversal",
+      "ordinal": 4,
+      "title": "File path traversal, traversal sequences stripped with superfluous URL-decode",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-05",
+      "category": "path-traversal",
+      "ordinal": 5,
+      "title": "File path traversal, validation of start of path",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "path-traversal-06",
+      "category": "path-traversal",
+      "ordinal": 6,
+      "title": "File path traversal, validation of file extension with null byte bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/path-traversal/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "os-command-injection-01",
+      "category": "os-command-injection",
+      "ordinal": 1,
+      "title": "OS command injection, simple case",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/os-command-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "os-command-injection-02",
+      "category": "os-command-injection",
+      "ordinal": 2,
+      "title": "Blind OS command injection with time delays",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/os-command-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "os-command-injection-03",
+      "category": "os-command-injection",
+      "ordinal": 3,
+      "title": "Blind OS command injection with output redirection",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/os-command-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "os-command-injection-04",
+      "category": "os-command-injection",
+      "ordinal": 4,
+      "title": "Blind OS command injection with out-of-band interaction",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/os-command-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "os-command-injection-05",
+      "category": "os-command-injection",
+      "ordinal": 5,
+      "title": "Blind OS command injection with out-of-band data exfiltration",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/os-command-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-01",
+      "category": "business-logic",
+      "ordinal": 1,
+      "title": "Excessive trust in client-side controls",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-02",
+      "category": "business-logic",
+      "ordinal": 2,
+      "title": "High-level logic vulnerability",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-03",
+      "category": "business-logic",
+      "ordinal": 3,
+      "title": "Inconsistent security controls",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-04",
+      "category": "business-logic",
+      "ordinal": 4,
+      "title": "Flawed enforcement of business rules",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-05",
+      "category": "business-logic",
+      "ordinal": 5,
+      "title": "Low-level logic flaw",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-06",
+      "category": "business-logic",
+      "ordinal": 6,
+      "title": "Inconsistent handling of exceptional input",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-07",
+      "category": "business-logic",
+      "ordinal": 7,
+      "title": "Weak isolation on dual-use endpoint",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-08",
+      "category": "business-logic",
+      "ordinal": 8,
+      "title": "Insufficient workflow validation",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-09",
+      "category": "business-logic",
+      "ordinal": 9,
+      "title": "Authentication bypass via flawed state machine",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-10",
+      "category": "business-logic",
+      "ordinal": 10,
+      "title": "Infinite money logic flaw",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-11",
+      "category": "business-logic",
+      "ordinal": 11,
+      "title": "Authentication bypass via encryption oracle",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "business-logic-12",
+      "category": "business-logic",
+      "ordinal": 12,
+      "title": "Bypassing access controls using email address parsing discrepancies",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/business-logic/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "information-disclosure-01",
+      "category": "information-disclosure",
+      "ordinal": 1,
+      "title": "Information disclosure in error messages",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/information-disclosure/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "information-disclosure-02",
+      "category": "information-disclosure",
+      "ordinal": 2,
+      "title": "Information disclosure on debug page",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/information-disclosure/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "information-disclosure-03",
+      "category": "information-disclosure",
+      "ordinal": 3,
+      "title": "Source code disclosure via backup files",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/information-disclosure/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "information-disclosure-04",
+      "category": "information-disclosure",
+      "ordinal": 4,
+      "title": "Authentication bypass via information disclosure",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/information-disclosure/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "information-disclosure-05",
+      "category": "information-disclosure",
+      "ordinal": 5,
+      "title": "Information disclosure in version control history",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/information-disclosure/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-01",
+      "category": "access-control",
+      "ordinal": 1,
+      "title": "Unprotected admin functionality",
+      "academy_url": "https://portswigger.net/web-security/access-control/lab-unprotected-admin-functionality",
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-02",
+      "category": "access-control",
+      "ordinal": 2,
+      "title": "Unprotected admin functionality with unpredictable URL",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-03",
+      "category": "access-control",
+      "ordinal": 3,
+      "title": "User role controlled by request parameter",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-04",
+      "category": "access-control",
+      "ordinal": 4,
+      "title": "User role can be modified in user profile",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-05",
+      "category": "access-control",
+      "ordinal": 5,
+      "title": "User ID controlled by request parameter",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-06",
+      "category": "access-control",
+      "ordinal": 6,
+      "title": "User ID controlled by request parameter, with unpredictable user IDs",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-07",
+      "category": "access-control",
+      "ordinal": 7,
+      "title": "User ID controlled by request parameter with data leakage in redirect",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-08",
+      "category": "access-control",
+      "ordinal": 8,
+      "title": "User ID controlled by request parameter with password disclosure",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-09",
+      "category": "access-control",
+      "ordinal": 9,
+      "title": "Insecure direct object references",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-10",
+      "category": "access-control",
+      "ordinal": 10,
+      "title": "URL-based access control can be circumvented",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-11",
+      "category": "access-control",
+      "ordinal": 11,
+      "title": "Method-based access control can be circumvented",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-12",
+      "category": "access-control",
+      "ordinal": 12,
+      "title": "Multi-step process with no access control on one step",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "access-control-13",
+      "category": "access-control",
+      "ordinal": 13,
+      "title": "Referer-based access control",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/access-control/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-01",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 1,
+      "title": "Remote code execution via web shell upload",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-02",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 2,
+      "title": "Web shell upload via Content-Type restriction bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-03",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 3,
+      "title": "Web shell upload via path traversal",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-04",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 4,
+      "title": "Web shell upload via extension blacklist bypass",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-05",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 5,
+      "title": "Web shell upload via obfuscated file extension",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-06",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 6,
+      "title": "Remote code execution via polyglot web shell upload",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "file-upload-vulnerabilities-07",
+      "category": "file-upload-vulnerabilities",
+      "ordinal": 7,
+      "title": "Web shell upload via race condition",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/file-upload-vulnerabilities/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-01",
+      "category": "race-conditions",
+      "ordinal": 1,
+      "title": "Limit overrun race conditions",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-02",
+      "category": "race-conditions",
+      "ordinal": 2,
+      "title": "Bypassing rate limits via race conditions",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-03",
+      "category": "race-conditions",
+      "ordinal": 3,
+      "title": "Multi-endpoint race conditions",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-04",
+      "category": "race-conditions",
+      "ordinal": 4,
+      "title": "Single-endpoint race conditions",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-05",
+      "category": "race-conditions",
+      "ordinal": 5,
+      "title": "Exploiting time-sensitive vulnerabilities",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "race-conditions-06",
+      "category": "race-conditions",
+      "ordinal": 6,
+      "title": "Partial construction race conditions",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/race-conditions/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-01",
+      "category": "ssrf",
+      "ordinal": 1,
+      "title": "Basic SSRF against the local server",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-02",
+      "category": "ssrf",
+      "ordinal": 2,
+      "title": "Basic SSRF against another back-end system",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-03",
+      "category": "ssrf",
+      "ordinal": 3,
+      "title": "SSRF with blacklist-based input filter",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-04",
+      "category": "ssrf",
+      "ordinal": 4,
+      "title": "SSRF with whitelist-based input filter",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-05",
+      "category": "ssrf",
+      "ordinal": 5,
+      "title": "SSRF with filter bypass via open redirection",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-06",
+      "category": "ssrf",
+      "ordinal": 6,
+      "title": "Blind SSRF with out-of-band detection",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "ssrf-07",
+      "category": "ssrf",
+      "ordinal": 7,
+      "title": "Blind SSRF with Shellshock exploitation",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/ssrf/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-01",
+      "category": "xxe-injection",
+      "ordinal": 1,
+      "title": "Exploiting XXE using external entities to retrieve files",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-02",
+      "category": "xxe-injection",
+      "ordinal": 2,
+      "title": "Exploiting XXE to perform SSRF attacks",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-03",
+      "category": "xxe-injection",
+      "ordinal": 3,
+      "title": "Blind XXE with out-of-band interaction",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-04",
+      "category": "xxe-injection",
+      "ordinal": 4,
+      "title": "Blind XXE with OOB interaction via XML parameter entities",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-05",
+      "category": "xxe-injection",
+      "ordinal": 5,
+      "title": "Exploiting blind XXE to exfiltrate data using a malicious external DTD",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-06",
+      "category": "xxe-injection",
+      "ordinal": 6,
+      "title": "Exploiting blind XXE to retrieve data via error messages",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-07",
+      "category": "xxe-injection",
+      "ordinal": 7,
+      "title": "Exploiting XInclude to retrieve files",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-08",
+      "category": "xxe-injection",
+      "ordinal": 8,
+      "title": "Exploiting XXE via image file upload",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "xxe-injection-09",
+      "category": "xxe-injection",
+      "ordinal": 9,
+      "title": "Exploiting XXE to retrieve data by repurposing a local DTD",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/xxe-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "nosql-injection-01",
+      "category": "nosql-injection",
+      "ordinal": 1,
+      "title": "Detecting NoSQL injection",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/nosql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "nosql-injection-02",
+      "category": "nosql-injection",
+      "ordinal": 2,
+      "title": "Exploiting NoSQL operator injection to bypass authentication",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/nosql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "nosql-injection-03",
+      "category": "nosql-injection",
+      "ordinal": 3,
+      "title": "Exploiting NoSQL injection to extract data",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/nosql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "nosql-injection-04",
+      "category": "nosql-injection",
+      "ordinal": 4,
+      "title": "Exploiting NoSQL operator injection to extract unknown fields",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/nosql-injection/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "api-testing-01",
+      "category": "api-testing",
+      "ordinal": 1,
+      "title": "Exploiting an API endpoint using documentation",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/api-testing/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "api-testing-02",
+      "category": "api-testing",
+      "ordinal": 2,
+      "title": "Exploiting server-side parameter pollution in a query string",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/api-testing/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "api-testing-03",
+      "category": "api-testing",
+      "ordinal": 3,
+      "title": "Finding and exploiting an unused API endpoint",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/api-testing/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "api-testing-04",
+      "category": "api-testing",
+      "ordinal": 4,
+      "title": "Exploiting a mass assignment vulnerability",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/api-testing/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "api-testing-05",
+      "category": "api-testing",
+      "ordinal": 5,
+      "title": "Exploiting server-side parameter pollution in a REST URL",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/api-testing/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "web-cache-deception-01",
+      "category": "web-cache-deception",
+      "ordinal": 1,
+      "title": "Exploiting path mapping for web cache deception",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/web-cache-deception/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "web-cache-deception-02",
+      "category": "web-cache-deception",
+      "ordinal": 2,
+      "title": "Exploiting path delimiters for web cache deception",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/web-cache-deception/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "web-cache-deception-03",
+      "category": "web-cache-deception",
+      "ordinal": 3,
+      "title": "Exploiting origin server normalization for web cache deception",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/web-cache-deception/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "web-cache-deception-04",
+      "category": "web-cache-deception",
+      "ordinal": 4,
+      "title": "Exploiting cache server normalization for web cache deception",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/web-cache-deception/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    },
+    {
+      "id": "web-cache-deception-05",
+      "category": "web-cache-deception",
+      "ordinal": 5,
+      "title": "Exploiting exact-match cache rules for web cache deception",
+      "academy_url": null,
+      "source_page": "https://github.com/themayursinha/portswigger-web-security-academy-labs/blob/main/web-cache-deception/README.md",
+      "state": "NOT_TESTED",
+      "verified": false
+    }
+  ]
+}
