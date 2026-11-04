@@ -340,6 +340,74 @@ const AdvancedGovernedWebLab = () => {
 }
 
 
+const AcademyTopicCoverage = () => {
+  const [filter, setFilter] = useState<'all' | 'server-side' | 'client-side' | 'advanced'>('all')
+  const catalog = useQuery({
+    queryKey: ['web-labs-academy-topics'],
+    queryFn: async () => AcademyTopicSchema.parse(
+      await apiHelpers.get<unknown>('/web-labs/academy-topics'),
+    ),
+  })
+  const visible = (catalog.data?.topics ?? []).filter(
+    (topic) => filter === 'all' || topic.group === filter,
+  )
+  return (
+    <details className="enterprise-card rounded-2xl p-5">
+      <summary className="cursor-pointer text-sm font-semibold">
+        Academy topic coverage · {catalog.data?.topic_count ?? '…'} topics
+      </summary>
+      <p className="mt-3 text-sm text-muted-foreground">
+        Training coverage index only. No lab is marked solved without a matching
+        AegisScan scan, application evidence and a verified lab objective.
+        Enter an explicitly authorized lab-instance URL in the Assessment Launcher below.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {(['all', 'server-side', 'client-side', 'advanced'] as const).map((item) => (
+          <button key={item} type="button" onClick={() => setFilter(item)}
+            aria-pressed={filter === item}
+            className={'rounded-lg border px-3 py-2 text-xs font-semibold ' +
+              (filter === item ? 'bg-primary text-primary-foreground' : 'bg-background')}>
+            {item}
+          </button>
+        ))}
+      </div>
+      {catalog.isError && <p className="mt-4 text-sm text-amber-600">Academy coverage catalog unavailable.</p>}
+      {catalog.isLoading && <p className="mt-4 text-sm text-muted-foreground">Loading coverage catalog…</p>}
+      {catalog.data && (
+        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {visible.map((topic) => (
+            <article key={topic.id} className="rounded-xl border p-4">
+              <div className="font-semibold break-words">{topic.id.replaceAll('-', ' ')}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {topic.count} catalog entries · {topic.verified} verified · {topic.assessed} assessed
+              </div>
+              <div className="mt-2 text-xs text-amber-600">{topic.state.replaceAll('_', ' ')}</div>
+            </article>
+          ))}
+        </div>
+      )}
+    </details>
+  )
+}
+
+const AcademyTopicSchema = z.object({
+  schema: z.literal('aegis.web-labs.academy-topics.v1'),
+  source: z.string(),
+  source_note: z.string(),
+  last_reviewed_at: z.string(),
+  topic_count: z.number().int().positive(),
+  lab_count_reference: z.number().int().positive(),
+  verification_policy: z.string(),
+  topics: z.array(z.object({
+    id: z.string(),
+    count: z.number().int().nonnegative(),
+    group: z.enum(['server-side', 'client-side', 'advanced']),
+    state: z.literal('NOT_TESTED'),
+    assessed: z.literal(0),
+    verified: z.literal(0),
+  }).strict()),
+}).strict()
+
 // The same Assessment Launcher handles a website link, creates/reuses its
 // asset, and routes all authorized scanners automatically. The specialist
 // two-identity BAC fixture remains available but no longer blocks normal scans.
@@ -347,6 +415,7 @@ export const WebLabsPage = () => {
   const t = useLanguageStore((state) => state.t)
   const [advanced, setAdvanced] = useState(false)
   return <div className="space-y-4">
+    <AcademyTopicCoverage />
     <AssessmentEntry preferredMode="url" />
     <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setAdvanced(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm font-semibold">{t('Specialized web lab tests (optional)')}</summary>
