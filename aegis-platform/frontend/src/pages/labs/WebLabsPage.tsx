@@ -382,12 +382,12 @@ const AcademyCatalogPanel = () => {
         <select aria-label="Academy category" value={category} onChange={(event) => { setCategory(event.target.value); setOffset(0) }}
           className="h-11 rounded-xl border bg-background px-3">
           <option value="">All categories</option>
-          {result.categories.map((item) => <option key={item.slug} value={item.slug}>{item.slug.replaceAll('-', ' ')} ({item.count})</option>)}
+          {result.categories.map((item) => <option key={item.slug} value={item.slug}>{item.slug.split('-').join(' ')} ({item.count})</option>)}
         </select>
       </label>
       <div className="divide-y rounded-xl border">
         {result.items.map((item) => <div key={item.widget_lab_id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
-          <div><strong>#{item.ordinal}</strong> · {item.category.replaceAll('-', ' ')} · lab {item.category_ordinal}</div>
+          <div><strong>#{item.ordinal}</strong> · {item.category.split('-').join(' ')} · lab {item.category_ordinal}</div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">Catalogued — not verified</span>
             <a href={result.source_url + '#' + item.category} target="_blank" rel="noreferrer"
