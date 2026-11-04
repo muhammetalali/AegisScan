@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -173,3 +175,12 @@ async def prepare(payload: PrepareWebLabIn, user=Depends(get_current_user)):
         raise HTTPException(404, detail={'code': 'unavailable_scope', 'message_ar': str(exc)}) from exc
     except UnknownLabDefinition as exc:
         raise HTTPException(422, detail={'code': 'unknown_lab_definition', 'message_ar': str(exc)}) from exc
+
+# Read-only training coverage index. This does not authorize or dispatch scans.
+@router.get('/academy-topics')
+async def academy_topics(user=Depends(get_current_user)):
+    actor_id = user.get('user_id') or user.get('id')
+    if not actor_id:
+        raise HTTPException(401, detail={'code': 'invalid_actor'})
+    filename = Path(__file__).resolve().parents[2] / 'resources/web-labs/academy-topics-baseline.json'
+    return json.loads(filename.read_text(encoding='utf-8'))
