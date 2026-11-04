@@ -184,3 +184,27 @@ async def academy_topics(user=Depends(get_current_user)):
         raise HTTPException(401, detail={'code': 'invalid_actor'})
     filename = Path(__file__).resolve().parents[2] / 'resources/web-labs/academy-topics-baseline.json'
     return json.loads(filename.read_text(encoding='utf-8'))
+
+@router.get('/academy-cases')
+async def academy_cases(
+    category: str | None = Query(default=None, max_length=64, pattern=r'^[a-z0-9-]+$'),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    actor_id = user.get('user_id') or user.get('id')
+    if not actor_id:
+        raise HTTPException(401, detail={'code': 'invalid_actor'})
+    filename = Path(__file__).resolve().parents[2] / 'resources/web-labs/academy-cases-server.json'
+    index = json.loads(filename.read_text(encoding='utf-8'))
+    rows = index['items']
+    subset = [item for item in rows if item['category'] == category] if category else rows
+    return {
+        'schema': 'aegis.web-labs.academy-case-list.v1',
+        'source_kind': index['source_kind'],
+        'verified_with_academy': False,
+        'catalog_complete': False,
+        'indexed_cases': len(rows),
+        'total': len(subset),
+        'items': subset[offset:offset + limit],
+    }
