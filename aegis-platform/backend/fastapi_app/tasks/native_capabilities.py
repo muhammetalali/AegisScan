@@ -29,10 +29,8 @@ from fastapi_app.services.kali_recon_provider import (
     recon_provider_decision,
 )
 from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
-from fastapi_app.services.native_output_enrichment import (
-    native_web_gateway_unavailability,
-    normalize_enriched_native_output,
-)
+from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+from fastapi_app.services.native_output_enrichment import native_web_gateway_unavailability
 from fastapi_app.services.native_tool_runtime import (
     NativeExecutionCancelled,
     effective_native_timeout,
