@@ -29,7 +29,10 @@ from fastapi_app.services.kali_recon_provider import (
     recon_provider_decision,
 )
 from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
-from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+from fastapi_app.services.native_output_enrichment import (
+    native_web_gateway_unavailability,
+    normalize_enriched_native_output,
+)
 from fastapi_app.services.native_tool_runtime import (
     NativeExecutionCancelled,
     effective_native_timeout,
@@ -316,6 +319,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             credential_materials=credential_materials,
         )
         normalized = normalize_enriched_native_output(capability_id, result.stdout)
+        target_gateway_issue = native_web_gateway_unavailability(capability_id, normalized)
         ok, reason = revalidate_bound_authorization(scan, authorization)
         if not ok:
             return _fail(scan, execution, reason, authorization_snapshot(authorization))
@@ -331,7 +335,11 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 credential_context,
                 snapshot,
             )
-        successful = result.exit_code == 0
+        successful = result.exit_code == 0 and target_gateway_issue is None
+        failure_reason = (
+            f'Target gateway unavailable: HTTP {target_gateway_issue["status_codes"]}; no application content assessed.'
+            if target_gateway_issue else result.stderr[:10000]
+        )
         finding_ids: list[str] = []
         finding_evidence_ids: list[str] = []
         graph_projection: dict[str, Any] = {}
@@ -353,6 +361,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                         'risk': capability.risk,
                         'adapter': capability.adapter,
                         'normalized': normalized,
+                        'target_gateway_issue': target_gateway_issue,
                         'credential_context': credential_context,
                         'runtime_provenance': runtime_provenance,
                         **snapshot,
@@ -385,7 +394,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             execution.completed_at = now
             execution.findings_found = len(finding_ids)
             execution.evidences_collected = 1 + len(finding_evidence_ids)
-            execution.error_message = '' if successful else result.stderr[:10000]
+            execution.error_message = '' if successful else failure_reason
             execution.result_data = {
                 'tool': capability.tool,
                 'capability_id': capability.id,
@@ -394,6 +403,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'scanner_evidence_id': str(evidence.id),
                 'finding_evidence_ids': finding_evidence_ids,
                 'observation_count': normalized['count'],
+                'target_gateway_issue': target_gateway_issue,
                 'finding_ids': finding_ids,
                 'credential_context': credential_context,
                 'graph_projection': graph_projection,
@@ -408,9 +418,10 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             scan.progress = 100
             scan.completed_at = now
             scan.current_phase = 'completed' if successful else 'partial'
+            scan.error_message = '' if successful else failure_reason
             scan.engine_results = {**(scan.engine_results or {}), capability.tool: execution.result_data}
             scan.save(update_fields=[
-                'status', 'progress', 'completed_at', 'current_phase', 'engine_results',
+                'status', 'progress', 'completed_at', 'current_phase', 'error_message', 'engine_results',
                 'findings_count', 'critical_count', 'high_count', 'medium_count', 'low_count', 'info_count',
                 'updated_at',
             ])
