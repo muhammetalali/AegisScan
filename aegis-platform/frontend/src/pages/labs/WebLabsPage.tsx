@@ -340,14 +340,87 @@ const AdvancedGovernedWebLab = () => {
 }
 
 
+
+type AcademyCatalog = {
+  contract_version: 'aegis.academy-catalog.v1'
+  source_url: string
+  retrieved_at_utc: string
+  category_count: number
+  lab_count: number
+  matching_count: number
+  offset: number
+  limit: number
+  categories: { slug: string; count: number }[]
+  items: { ordinal: number; category: string; category_ordinal: number; widget_lab_id: string }[]
+}
+
+const AcademyCatalogPanel = () => {
+  const [category, setCategory] = useState('')
+  const [offset, setOffset] = useState(0)
+  const size = 25
+  const query = useQuery<AcademyCatalog>({
+    queryKey: ['web-labs-academy-catalog', category, offset],
+    queryFn: () => apiHelpers.get<AcademyCatalog>('/web-labs/academy-catalog', {
+      params: { ...(category ? { category } : {}), offset, limit: size },
+    }),
+  })
+  const result = query.data
+  return <div className="mt-4 space-y-4 border-t pt-4">
+    <p className="text-sm text-muted-foreground">
+      Official Academy inventory only. A lab is never considered solved from a catalog entry or a scanner exit code.
+      Launch an individual Academy instance and use the existing Assessment Launcher above to scan its authorized URL.
+    </p>
+    {query.isError && <p role="alert" className="text-sm text-destructive">Could not load the Academy catalog.</p>}
+    {query.isLoading && <Loader2 aria-label="Loading Academy inventory" className="h-5 w-5 animate-spin" />}
+    {result && <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm font-semibold">{result.lab_count} labs · {result.category_count} categories · catalog only</span>
+        <a className="text-sm font-semibold text-primary underline" href={result.source_url} target="_blank" rel="noreferrer">Official All Labs</a>
+      </div>
+      <label className="flex max-w-lg flex-col gap-2 text-sm font-medium">
+        Category
+        <select aria-label="Academy category" value={category} onChange={(event) => { setCategory(event.target.value); setOffset(0) }}
+          className="h-11 rounded-xl border bg-background px-3">
+          <option value="">All categories</option>
+          {result.categories.map((item) => <option key={item.slug} value={item.slug}>{item.slug.split('-').join(' ')} ({item.count})</option>)}
+        </select>
+      </label>
+      <div className="divide-y rounded-xl border">
+        {result.items.map((item) => <div key={item.widget_lab_id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+          <div><strong>#{item.ordinal}</strong> · {item.category.split('-').join(' ')} · lab {item.category_ordinal}</div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">Catalogued — not verified</span>
+            <a href={result.source_url + '#' + item.category} target="_blank" rel="noreferrer"
+              className="text-xs font-semibold text-primary underline">Official category</a>
+          </div>
+        </div>)}
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-xs text-muted-foreground">{result.matching_count} matching labs · records {offset+1}–{offset+result.items.length}</span>
+        <div className="flex gap-2">
+          <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset-size))}
+            className="rounded-lg border px-3 py-2 text-xs disabled:opacity-40">Previous</button>
+          <button type="button" disabled={offset + size >= result.matching_count} onClick={() => setOffset(offset+size)}
+            className="rounded-lg border px-3 py-2 text-xs disabled:opacity-40">Next</button>
+        </div>
+      </div>
+    </>}
+  </div>
+}
+
 // The same Assessment Launcher handles a website link, creates/reuses its
 // asset, and routes all authorized scanners automatically. The specialist
 // two-identity BAC fixture remains available but no longer blocks normal scans.
 export const WebLabsPage = () => {
   const t = useLanguageStore((state) => state.t)
   const [advanced, setAdvanced] = useState(false)
+  const [catalogOpen, setCatalogOpen] = useState(false)
   return <div className="space-y-4">
     <AssessmentEntry preferredMode="url" />
+    <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setCatalogOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-sm font-semibold">PortSwigger Academy — All Labs catalog</summary>
+      {catalogOpen && <AcademyCatalogPanel />}
+    </details>
     <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setAdvanced(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm font-semibold">{t('Specialized web lab tests (optional)')}</summary>
       <p className="mt-2 text-sm text-muted-foreground">{t('For BAC multi-identity laboratory testing only. Normal website scans require just the URL above.')}</p>

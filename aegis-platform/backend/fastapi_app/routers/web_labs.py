@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -35,6 +37,7 @@ class ArabicValidationRoute(APIRoute):
 
 
 router = APIRouter(route_class=ArabicValidationRoute)
+ACADEMY_CATALOG_PATH = Path(__file__).resolve().parents[2] / 'resources/web-labs/portswigger-all-labs.v1.json'
 
 
 class PrepareWebLabIn(BaseModel):
@@ -173,3 +176,55 @@ async def prepare(payload: PrepareWebLabIn, user=Depends(get_current_user)):
         raise HTTPException(404, detail={'code': 'unavailable_scope', 'message_ar': str(exc)}) from exc
     except UnknownLabDefinition as exc:
         raise HTTPException(422, detail={'code': 'unknown_lab_definition', 'message_ar': str(exc)}) from exc
+
+
+class AcademyCatalogEntry(ContractModel):
+    ordinal: int
+    category: str
+    category_ordinal: int
+    widget_lab_id: str
+
+
+class AcademyCatalogOut(ContractModel):
+    contract_version: Literal['aegis.academy-catalog.v1']
+    source_url: str
+    retrieved_at_utc: str
+    category_count: int
+    lab_count: int
+    matching_count: int
+    offset: int
+    limit: int
+    categories: list[dict]
+    items: list[AcademyCatalogEntry]
+
+
+@router.get('/academy-catalog', response_model=AcademyCatalogOut)
+async def academy_catalog(
+    category: str | None = Query(default=None, pattern=r'^[a-z0-9-]+$'),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    """Catalog-only inventory. Does not launch, authorize or solve a target."""
+    if not (user.get('user_id') or user.get('id')):
+        raise HTTPException(status_code=401, detail='Authenticated user required')
+    catalog = json.loads(ACADEMY_CATALOG_PATH.read_text(encoding='utf-8'))
+    categories = catalog['categories']
+    if category and category not in {item['slug'] for item in categories}:
+        raise HTTPException(status_code=404, detail='Unknown Academy category')
+    rows = [
+        row for row in catalog['labs']
+        if category is None or row['category'] == category
+    ]
+    return AcademyCatalogOut(
+        contract_version='aegis.academy-catalog.v1',
+        source_url=catalog['source_url'],
+        retrieved_at_utc=catalog['retrieved_at_utc'],
+        category_count=catalog['category_count'],
+        lab_count=catalog['lab_count'],
+        matching_count=len(rows),
+        offset=offset,
+        limit=limit,
+        categories=categories,
+        items=[AcademyCatalogEntry(**row) for row in rows[offset:offset+limit]],
+    )
