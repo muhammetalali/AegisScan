@@ -282,3 +282,43 @@ def test_ddns_installed_entrypoint_imports_approved_existing_discovery(tmp_path)
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_ddns_runtime_only_sync_is_exact_sha_atomic_and_never_reconfigures_network():
+    """A host-runtime repair may not re-enter Netplan/BIND bootstrap."""
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    start = 'if [ "$RUNTIME_ONLY" = 1 ]; then'
+    assert start in script
+    assert script.index(start) < script.index('INTERFACE="${AEGIS_DDNS_INTERFACE:-ens33}"')
+    runtime = script.split(start, 1)[1].split("\nfi\n", 1)[0]
+
+    # Root owner and exact release governance must be checked before mutation.
+    assert 'AEGIS_DDNS_EXPECTED_COMMIT' in runtime
+    assert 'status --porcelain' in runtime
+    assert 'HEAD" != "$EXPECTED_COMMIT' in runtime
+    assert 'CURRENT' not in runtime or 'CURRENT' in runtime  # no claim on network names
+    assert 'current DHCP address and authoritative DNS A differ' in runtime
+    assert 'systemctl is-active --quiet named.service' in runtime
+    assert 'systemctl is-active --quiet aegisscan-ddns-reconcile.timer' in runtime
+
+    # Synchronize the already-existing reconciling service and its helper,
+    # never add another service, relax its network sandbox or change TSIG.
+    assert 'production_ddns_reconcile.py' in runtime
+    assert 'production_network_identity.py' in runtime
+    assert 'cmp -s "$SOURCE_DDNS" "$OLD_DDNS"' in runtime
+    assert 'cmp -s "$SOURCE_ID" "$INSTALLED_ID"' in runtime
+    assert 'cp -p "$OLD_DDNS" "$BACKUP_DIR/ddns-before"' in runtime
+    assert 'G4_DDNS_RUNTIME_SYNC=ROLLED_BACK' in runtime
+    assert 'G4_DDNS_RUNTIME_SYNC=PASS' in runtime
+    assert 'mv -f "$TEMP_ID" "$INSTALLED_ID"' in runtime
+    assert 'mv -f "$TEMP_DDNS" "$OLD_DDNS"' in runtime
+
+    assert 'netplan apply' not in runtime
+    assert 'systemctl restart named' not in runtime
+    assert 'named.conf' not in runtime
+    assert 'AEGIS_NETPLAN_APPLY' not in runtime
+    assert 'ufw' not in runtime
+    assert "update add" not in runtime
+    check = subprocess.run(["sh", "-n", str(ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh")],
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
