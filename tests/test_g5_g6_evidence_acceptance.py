@@ -48,9 +48,10 @@ def _g5():
 def _g6():
     requirements = [{"code": "REQ-%03d" % i, "exact_text": "owner supplied clause %d" % i}
                     for i in range(1, 108)]
-    decisions = [{"code": chr(65 + (i % 9)) + "%02d" % (i // 9 + 1),
-                  "exact_text": "record %d" % i} for i in range(100)]
-    # Correct unique A01..A12, B01..B12 etc, 100 distinct codes.
+    import json
+    decisions = json.loads(
+        (ROOT / "docs/acceptance/g6-owner-decisions-100.source.json").read_text(encoding="utf-8")
+    )["original_decisions_100"]
     matrix = [{
         "code": x["code"], "release_sha": SHA,
         "test_ref": "tests/a.py", "ci_run_ref": "run/1",
