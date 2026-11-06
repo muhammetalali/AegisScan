@@ -263,6 +263,43 @@ def _enrich_browser_observations(base: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_GATEWAY_UNAVAILABLE_STATUSES = frozenset({502, 503, 504})
+
+
+def native_web_gateway_unavailability(
+    capability_id: str, normalized: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Do not call a gateway-error-only crawl a successful application assessment.
+
+    This never discards raw observations. It is limited to the actual target
+    response rows; unrelated parameter summaries are not status evidence.
+    Mixed healthy and gateway-error responses retain their normal status.
+    """
+    if capability_id not in {'web.httpx', 'web.katana'}:
+        return None
+    supported_kinds = (
+        {'web-http-service'} if capability_id == 'web.httpx'
+        else {'web-discovered-endpoint', 'web-javascript-resource'}
+    )
+    rows = normalized.get('observations')
+    if not isinstance(rows, list):
+        return None
+    statuses = [
+        row['status'] for row in rows
+        if isinstance(row, dict)
+        and row.get('kind') in supported_kinds
+        and type(row.get('status')) is int
+        and 100 <= row['status'] <= 599
+    ]
+    if not statuses or any(code not in _GATEWAY_UNAVAILABLE_STATUSES for code in statuses):
+        return None
+    return {
+        'reason_code': 'TARGET_GATEWAY_UNAVAILABLE',
+        'status_codes': sorted(set(statuses)),
+        'observed_response_count': len(statuses),
+    }
+
+
 def normalize_enriched_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     if is_wstg_internal_capability(capability_id):
         return normalize_wstg_internal_output(capability_id, stdout)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
-from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+from fastapi_app.services.native_output_enrichment import (
+    native_web_gateway_unavailability,
+    normalize_enriched_native_output,
+)
 
 
 def _surface(result: dict) -> dict:
@@ -137,3 +140,49 @@ def test_non_enriched_capability_delegates_to_existing_normalizer_contract():
     assert result['schema'] == 'aegis.native-observations.v1'
     assert any(item.get('kind') == 'dns-hostname' for item in result['observations'])
     assert 'enrichment' not in result
+
+
+def test_httpx_gateway_only_is_not_a_clean_scan():
+    raw = json.dumps({'url': 'https://lab.example.test/', 'status_code': 504})
+    normalized = normalize_enriched_native_output('web.httpx', raw)
+    assert native_web_gateway_unavailability('web.httpx', normalized) == {
+        'reason_code': 'TARGET_GATEWAY_UNAVAILABLE',
+        'status_codes': [504],
+        'observed_response_count': 1,
+    }
+
+
+def test_katana_gateway_only_is_not_a_clean_crawl():
+    raw = json.dumps({
+        'request': {'method': 'GET', 'endpoint': 'https://lab.example.test/'},
+        'response': {'status_code': 502},
+    })
+    normalized = normalize_enriched_native_output('web.katana', raw)
+    assert native_web_gateway_unavailability('web.katana', normalized)['status_codes'] == [502]
+
+
+def test_mixed_good_and_gateway_errors_remain_valid_observations():
+    raw = '\n'.join([
+        json.dumps({'url': 'https://lab.example.test/', 'status_code': 200}),
+        json.dumps({'url': 'https://lab.example.test/unavailable', 'status_code': 504}),
+    ])
+    normalized = normalize_enriched_native_output('web.httpx', raw)
+    assert native_web_gateway_unavailability('web.httpx', normalized) is None
+
+
+def test_security_related_403_and_app_500_are_not_misclassified():
+    for code in (200, 401, 403, 404, 500):
+        raw = json.dumps({'url': 'https://lab.example.test/', 'status_code': code})
+        normalized = normalize_enriched_native_output('web.httpx', raw)
+        assert native_web_gateway_unavailability('web.httpx', normalized) is None
+
+
+def test_empty_or_unrecognized_rows_are_not_gateway_evidence():
+    assert native_web_gateway_unavailability('web.httpx', {'observations': []}) is None
+    assert native_web_gateway_unavailability('web.katana', {'observations': [{'kind': 'other', 'status': 504}]}) is None
+
+
+def test_other_capabilities_keep_their_existing_own_error_semantics():
+    raw = json.dumps({'url': 'https://lab.example.test/', 'status_code': 504})
+    normalized = normalize_enriched_native_output('web.httpx', raw)
+    assert native_web_gateway_unavailability('browser.dom-snapshot', normalized) is None

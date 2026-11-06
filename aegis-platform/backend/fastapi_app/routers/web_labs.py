@@ -37,6 +37,7 @@ class ArabicValidationRoute(APIRoute):
 
 
 router = APIRouter(route_class=ArabicValidationRoute)
+ACADEMY_CATALOG_PATH = Path(__file__).resolve().parents[2] / 'resources/web-labs/portswigger-all-labs.v1.json'
 
 
 class PrepareWebLabIn(BaseModel):
@@ -176,35 +177,54 @@ async def prepare(payload: PrepareWebLabIn, user=Depends(get_current_user)):
     except UnknownLabDefinition as exc:
         raise HTTPException(422, detail={'code': 'unknown_lab_definition', 'message_ar': str(exc)}) from exc
 
-# Read-only training coverage index. This does not authorize or dispatch scans.
-@router.get('/academy-topics')
-async def academy_topics(user=Depends(get_current_user)):
-    actor_id = user.get('user_id') or user.get('id')
-    if not actor_id:
-        raise HTTPException(401, detail={'code': 'invalid_actor'})
-    filename = Path(__file__).resolve().parents[2] / 'resources/web-labs/academy-topics-baseline.json'
-    return json.loads(filename.read_text(encoding='utf-8'))
 
-@router.get('/academy-cases')
-async def academy_cases(
-    category: str | None = Query(default=None, max_length=64, pattern=r'^[a-z0-9-]+$'),
+class AcademyCatalogEntry(ContractModel):
+    ordinal: int
+    category: str
+    category_ordinal: int
+    widget_lab_id: str
+
+
+class AcademyCatalogOut(ContractModel):
+    contract_version: Literal['aegis.academy-catalog.v1']
+    source_url: str
+    retrieved_at_utc: str
+    category_count: int
+    lab_count: int
+    matching_count: int
+    offset: int
+    limit: int
+    categories: list[dict]
+    items: list[AcademyCatalogEntry]
+
+
+@router.get('/academy-catalog', response_model=AcademyCatalogOut)
+async def academy_catalog(
+    category: str | None = Query(default=None, pattern=r'^[a-z0-9-]+$'),
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=25, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=100),
     user=Depends(get_current_user),
 ):
-    actor_id = user.get('user_id') or user.get('id')
-    if not actor_id:
-        raise HTTPException(401, detail={'code': 'invalid_actor'})
-    filename = Path(__file__).resolve().parents[2] / 'resources/web-labs/academy-cases-server.json'
-    index = json.loads(filename.read_text(encoding='utf-8'))
-    rows = index['items']
-    subset = [item for item in rows if item['category'] == category] if category else rows
-    return {
-        'schema': 'aegis.web-labs.academy-case-list.v1',
-        'source_kind': index['source_kind'],
-        'verified_with_academy': False,
-        'catalog_complete': False,
-        'indexed_cases': len(rows),
-        'total': len(subset),
-        'items': subset[offset:offset + limit],
-    }
+    """Catalog-only inventory. Does not launch, authorize or solve a target."""
+    if not (user.get('user_id') or user.get('id')):
+        raise HTTPException(status_code=401, detail='Authenticated user required')
+    catalog = json.loads(ACADEMY_CATALOG_PATH.read_text(encoding='utf-8'))
+    categories = catalog['categories']
+    if category and category not in {item['slug'] for item in categories}:
+        raise HTTPException(status_code=404, detail='Unknown Academy category')
+    rows = [
+        row for row in catalog['labs']
+        if category is None or row['category'] == category
+    ]
+    return AcademyCatalogOut(
+        contract_version='aegis.academy-catalog.v1',
+        source_url=catalog['source_url'],
+        retrieved_at_utc=catalog['retrieved_at_utc'],
+        category_count=catalog['category_count'],
+        lab_count=catalog['lab_count'],
+        matching_count=len(rows),
+        offset=offset,
+        limit=limit,
+        categories=categories,
+        items=[AcademyCatalogEntry(**row) for row in rows[offset:offset+limit]],
+    )

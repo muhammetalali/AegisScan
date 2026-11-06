@@ -340,73 +340,127 @@ const AdvancedGovernedWebLab = () => {
 }
 
 
-const AcademyTopicCoverage = () => {
-  const [filter, setFilter] = useState<'all' | 'server-side' | 'client-side' | 'advanced'>('all')
-  const catalog = useQuery({
-    queryKey: ['web-labs-academy-topics'],
-    queryFn: async () => AcademyTopicSchema.parse(
-      await apiHelpers.get<unknown>('/web-labs/academy-topics'),
-    ),
-  })
-  const visible = (catalog.data?.topics ?? []).filter(
-    (topic) => filter === 'all' || topic.group === filter,
-  )
-  return (
-    <details className="enterprise-card rounded-2xl p-5">
-      <summary className="cursor-pointer text-sm font-semibold">
-        Academy topic coverage · {catalog.data?.topic_count ?? '…'} topics
-      </summary>
-      <p className="mt-3 text-sm text-muted-foreground">
-        Training coverage index only. No lab is marked solved without a matching
-        AegisScan scan, application evidence and a verified lab objective.
-        Enter an explicitly authorized lab-instance URL in the Assessment Launcher below.
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {(['all', 'server-side', 'client-side', 'advanced'] as const).map((item) => (
-          <button key={item} type="button" onClick={() => setFilter(item)}
-            aria-pressed={filter === item}
-            className={'rounded-lg border px-3 py-2 text-xs font-semibold ' +
-              (filter === item ? 'bg-primary text-primary-foreground' : 'bg-background')}>
-            {item}
-          </button>
-        ))}
-      </div>
-      {catalog.isError && <p className="mt-4 text-sm text-amber-600">Academy coverage catalog unavailable.</p>}
-      {catalog.isLoading && <p className="mt-4 text-sm text-muted-foreground">Loading coverage catalog…</p>}
-      {catalog.data && (
-        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {visible.map((topic) => (
-            <article key={topic.id} className="rounded-xl border p-4">
-              <div className="font-semibold break-words">{topic.id.replaceAll('-', ' ')}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {topic.count} catalog entries · {topic.verified} verified · {topic.assessed} assessed
-              </div>
-              <div className="mt-2 text-xs text-amber-600">{topic.state.replaceAll('_', ' ')}</div>
-            </article>
-          ))}
-        </div>
-      )}
-    </details>
-  )
+
+type AcademyCatalog = {
+  contract_version: 'aegis.academy-catalog.v1'
+  source_url: string
+  retrieved_at_utc: string
+  category_count: number
+  lab_count: number
+  matching_count: number
+  offset: number
+  limit: number
+  categories: { slug: string; count: number }[]
+  items: { ordinal: number; category: string; category_ordinal: number; widget_lab_id: string }[]
 }
 
-const AcademyTopicSchema = z.object({
-  schema: z.literal('aegis.web-labs.academy-topics.v1'),
-  source: z.string(),
-  source_note: z.string(),
-  last_reviewed_at: z.string(),
-  topic_count: z.number().int().positive(),
-  lab_count_reference: z.number().int().positive(),
-  verification_policy: z.string(),
-  topics: z.array(z.object({
-    id: z.string(),
-    count: z.number().int().nonnegative(),
-    group: z.enum(['server-side', 'client-side', 'advanced']),
-    state: z.literal('NOT_TESTED'),
-    assessed: z.literal(0),
-    verified: z.literal(0),
-  }).strict()),
-}).strict()
+// Presentation-only grouping from the prior Academy topic proposal.
+// The authoritative inventory, its 273 IDs and their order remain in /academy-catalog.
+// Unknown/new official categories are shown rather than silently dropped.
+const ACADEMY_CATEGORY_GROUPS = [
+  {
+    key: 'server-side',
+    label: 'Server-side topics',
+    slugs: [
+      'sql-injection', 'authentication', 'path-traversal',
+      'os-command-injection', 'business-logic-vulnerabilities',
+      'information-disclosure', 'access-control-vulnerabilities',
+      'file-upload-vulnerabilities', 'race-conditions',
+      'server-side-request-forgery-ssrf', 'xml-external-entity-xxe-injection',
+      'nosql-injection', 'api-testing', 'web-cache-deception',
+    ],
+  },
+  {
+    key: 'client-side',
+    label: 'Client-side topics',
+    slugs: [
+      'cross-site-scripting', 'cross-site-request-forgery-csrf',
+      'cross-origin-resource-sharing-cors', 'clickjacking',
+      'dom-based-vulnerabilities', 'websockets',
+    ],
+  },
+  {
+    key: 'advanced',
+    label: 'Advanced topics',
+    slugs: [
+      'insecure-deserialization', 'web-llm-attacks', 'graphql-api-vulnerabilities',
+      'server-side-template-injection', 'web-cache-poisoning',
+      'http-host-header-attacks', 'http-request-smuggling',
+      'oauth-authentication', 'jwt', 'prototype-pollution', 'essential-skills',
+    ],
+  },
+] as const
+
+export function groupAcademyCategories<T extends { slug: string }>(categories: readonly T[]) {
+  const known = new Set<string>(ACADEMY_CATEGORY_GROUPS.flatMap((group) => group.slugs))
+  const grouped: { key: string; label: string; items: T[] }[] =
+    ACADEMY_CATEGORY_GROUPS.map((group) => ({
+      key: group.key,
+      label: group.label,
+      items: categories.filter((item) => (group.slugs as readonly string[]).includes(item.slug)),
+    })).filter((group) => group.items.length > 0)
+  const other = categories.filter((item) => !known.has(item.slug))
+  if (other.length > 0) grouped.push({ key: 'other', label: 'Other official topics', items: other })
+  return grouped
+}
+
+const AcademyCatalogPanel = () => {
+  const [category, setCategory] = useState('')
+  const [offset, setOffset] = useState(0)
+  const size = 25
+  const query = useQuery<AcademyCatalog>({
+    queryKey: ['web-labs-academy-catalog', category, offset],
+    queryFn: () => apiHelpers.get<AcademyCatalog>('/web-labs/academy-catalog', {
+      params: { ...(category ? { category } : {}), offset, limit: size },
+    }),
+  })
+  const result = query.data
+  return <div className="mt-4 space-y-4 border-t pt-4">
+    <p className="text-sm text-muted-foreground">
+      Official Academy inventory only. Topic groups are browsing aids, not additional labs or scan results. A lab is never considered solved from a catalog entry or a scanner exit code.
+      Launch an individual Academy instance and use the existing Assessment Launcher above to scan its authorized URL.
+    </p>
+    {query.isError && <p role="alert" className="text-sm text-destructive">Could not load the Academy catalog.</p>}
+    {query.isLoading && <Loader2 aria-label="Loading Academy inventory" className="h-5 w-5 animate-spin" />}
+    {result && <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm font-semibold">{result.lab_count} labs · {result.category_count} categories · catalog only</span>
+        <a className="text-sm font-semibold text-primary underline" href={result.source_url} target="_blank" rel="noreferrer">Official All Labs</a>
+      </div>
+      <label className="flex max-w-lg flex-col gap-2 text-sm font-medium">
+        Category
+        <select aria-label="Academy category" value={category} onChange={(event) => { setCategory(event.target.value); setOffset(0) }}
+          className="h-11 rounded-xl border bg-background px-3">
+          <option value="">All categories</option>
+          {groupAcademyCategories(result.categories).map((group) => (
+            <optgroup key={group.key} label={group.label}>
+              {group.items.map((item) => <option key={item.slug} value={item.slug}>{item.slug.split('-').join(' ')} ({item.count})</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <div className="divide-y rounded-xl border">
+        {result.items.map((item) => <div key={item.widget_lab_id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+          <div><strong>#{item.ordinal}</strong> · {item.category.split('-').join(' ')} · lab {item.category_ordinal}</div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">Catalogued — not verified</span>
+            <a href={result.source_url + '#' + item.category} target="_blank" rel="noreferrer"
+              className="text-xs font-semibold text-primary underline">Official category</a>
+          </div>
+        </div>)}
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-xs text-muted-foreground">{result.matching_count} matching labs · records {offset+1}–{offset+result.items.length}</span>
+        <div className="flex gap-2">
+          <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset-size))}
+            className="rounded-lg border px-3 py-2 text-xs disabled:opacity-40">Previous</button>
+          <button type="button" disabled={offset + size >= result.matching_count} onClick={() => setOffset(offset+size)}
+            className="rounded-lg border px-3 py-2 text-xs disabled:opacity-40">Next</button>
+        </div>
+      </div>
+    </>}
+  </div>
+}
 
 // The same Assessment Launcher handles a website link, creates/reuses its
 // asset, and routes all authorized scanners automatically. The specialist
@@ -414,9 +468,13 @@ const AcademyTopicSchema = z.object({
 export const WebLabsPage = () => {
   const t = useLanguageStore((state) => state.t)
   const [advanced, setAdvanced] = useState(false)
+  const [catalogOpen, setCatalogOpen] = useState(false)
   return <div className="space-y-4">
-    <AcademyTopicCoverage />
     <AssessmentEntry preferredMode="url" />
+    <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setCatalogOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-sm font-semibold">PortSwigger Academy — All Labs catalog</summary>
+      {catalogOpen && <AcademyCatalogPanel />}
+    </details>
     <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setAdvanced(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm font-semibold">{t('Specialized web lab tests (optional)')}</summary>
       <p className="mt-2 text-sm text-muted-foreground">{t('For BAC multi-identity laboratory testing only. Normal website scans require just the URL above.')}</p>
