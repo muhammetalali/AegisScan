@@ -354,6 +354,56 @@ type AcademyCatalog = {
   items: { ordinal: number; category: string; category_ordinal: number; widget_lab_id: string }[]
 }
 
+// Presentation-only grouping from the prior Academy topic proposal.
+// The authoritative inventory, its 273 IDs and their order remain in /academy-catalog.
+// Unknown/new official categories are shown rather than silently dropped.
+const ACADEMY_CATEGORY_GROUPS = [
+  {
+    key: 'server-side',
+    label: 'Server-side topics',
+    slugs: [
+      'sql-injection', 'authentication', 'path-traversal',
+      'os-command-injection', 'business-logic-vulnerabilities',
+      'information-disclosure', 'access-control-vulnerabilities',
+      'file-upload-vulnerabilities', 'race-conditions',
+      'server-side-request-forgery-ssrf', 'xml-external-entity-xxe-injection',
+      'nosql-injection', 'api-testing', 'web-cache-deception',
+    ],
+  },
+  {
+    key: 'client-side',
+    label: 'Client-side topics',
+    slugs: [
+      'cross-site-scripting', 'cross-site-request-forgery-csrf',
+      'cross-origin-resource-sharing-cors', 'clickjacking',
+      'dom-based-vulnerabilities', 'websockets',
+    ],
+  },
+  {
+    key: 'advanced',
+    label: 'Advanced topics',
+    slugs: [
+      'insecure-deserialization', 'web-llm-attacks', 'graphql-api-vulnerabilities',
+      'server-side-template-injection', 'web-cache-poisoning',
+      'http-host-header-attacks', 'http-request-smuggling',
+      'oauth-authentication', 'jwt', 'prototype-pollution', 'essential-skills',
+    ],
+  },
+] as const
+
+export function groupAcademyCategories<T extends { slug: string }>(categories: readonly T[]) {
+  const known = new Set<string>(ACADEMY_CATEGORY_GROUPS.flatMap((group) => group.slugs))
+  const grouped: { key: string; label: string; items: T[] }[] =
+    ACADEMY_CATEGORY_GROUPS.map((group) => ({
+      key: group.key,
+      label: group.label,
+      items: categories.filter((item) => (group.slugs as readonly string[]).includes(item.slug)),
+    })).filter((group) => group.items.length > 0)
+  const other = categories.filter((item) => !known.has(item.slug))
+  if (other.length > 0) grouped.push({ key: 'other', label: 'Other official topics', items: other })
+  return grouped
+}
+
 const AcademyCatalogPanel = () => {
   const [category, setCategory] = useState('')
   const [offset, setOffset] = useState(0)
@@ -367,7 +417,7 @@ const AcademyCatalogPanel = () => {
   const result = query.data
   return <div className="mt-4 space-y-4 border-t pt-4">
     <p className="text-sm text-muted-foreground">
-      Official Academy inventory only. A lab is never considered solved from a catalog entry or a scanner exit code.
+      Official Academy inventory only. Topic groups are browsing aids, not additional labs or scan results. A lab is never considered solved from a catalog entry or a scanner exit code.
       Launch an individual Academy instance and use the existing Assessment Launcher above to scan its authorized URL.
     </p>
     {query.isError && <p role="alert" className="text-sm text-destructive">Could not load the Academy catalog.</p>}
@@ -382,7 +432,11 @@ const AcademyCatalogPanel = () => {
         <select aria-label="Academy category" value={category} onChange={(event) => { setCategory(event.target.value); setOffset(0) }}
           className="h-11 rounded-xl border bg-background px-3">
           <option value="">All categories</option>
-          {result.categories.map((item) => <option key={item.slug} value={item.slug}>{item.slug.split('-').join(' ')} ({item.count})</option>)}
+          {groupAcademyCategories(result.categories).map((group) => (
+            <optgroup key={group.key} label={group.label}>
+              {group.items.map((item) => <option key={item.slug} value={item.slug}>{item.slug.split('-').join(' ')} ({item.count})</option>)}
+            </optgroup>
+          ))}
         </select>
       </label>
       <div className="divide-y rounded-xl border">
