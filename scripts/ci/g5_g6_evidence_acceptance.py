@@ -169,7 +169,24 @@ def assess_g6(evidence: dict[str, Any] | None, *, release_sha: str) -> dict[str,
                 and DECISION_CODE.fullmatch(x["code"]) for x in decisions)
         and len({x["code"] for x in decisions if isinstance(x, dict) and _required_str(x.get("code"))}) == 100
     )
-    if not good_100:
+    # Unlike the 107, the authentic 100 owner decisions are supplied as
+    # a source-preserving, checked-in attachment extraction. Reject synthetic
+    # or paraphrased decision text even if the codes/count match.
+    owner_decisions_file = (
+        Path(__file__).resolve().parents[2]
+        / "docs/acceptance/g6-owner-decisions-100.source.json")
+    try:
+        trusted = json.loads(owner_decisions_file.read_text(encoding="utf-8"))
+        trusted_100 = (
+            trusted.get("source_sha256")
+            == "31776f262b7cff04af04486d293cedc56642236c536ddfbb723e4fc6be80c293"
+            and trusted.get("not_a_substitute_for_107") is True
+            and trusted.get("original_requirements_107") is None
+            and decisions == trusted.get("original_decisions_100")
+        )
+    except (OSError, ValueError, TypeError):
+        trusted_100 = False
+    if not good_100 or not trusted_100:
         gaps.append("DISTINCT_100_ORIGINAL_DECISIONS_NOT_VERIFIED")
     matrix_ok = False
     if good_107 and isinstance(matrix, list) and len(matrix) == 107:
