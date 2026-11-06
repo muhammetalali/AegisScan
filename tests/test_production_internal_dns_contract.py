@@ -296,7 +296,7 @@ def test_ddns_runtime_only_sync_is_exact_sha_atomic_and_never_reconfigures_netwo
     assert 'AEGIS_DDNS_EXPECTED_COMMIT' in runtime
     assert 'status --porcelain' in runtime
     assert 'HEAD" != "$EXPECTED_COMMIT' in runtime
-    assert 'CURRENT' not in runtime or 'CURRENT' in runtime  # no claim on network names
+    assert 'if [ "$PROMOTED" = 1 ] && [ "$COMMITTED" != 1 ]; then' in runtime
     assert 'current DHCP address and authoritative DNS A differ' in runtime
     assert 'systemctl is-active --quiet named.service' in runtime
     assert 'systemctl is-active --quiet aegisscan-ddns-reconcile.timer' in runtime
