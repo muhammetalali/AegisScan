@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "aegisscan-release-20261105-7b3b1453",
+  "request_id": "aegisscan-release-20261106-001b8d33",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "7b3b14535db3c2c78d8cc87b8a1b6a0fe47c299b",
-  "requested_at": "2026-11-05T06:25:04Z",
-  "expires_at": "2026-11-06T04:25:04Z"
+  "requested_base_sha": "001b8d3304558618bcc29b527560e5df9a56e1bb",
+  "requested_at": "2026-11-06T12:10:53Z",
+  "expires_at": "2026-11-07T10:10:53Z"
 }
