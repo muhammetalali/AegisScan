@@ -32,6 +32,8 @@ on:
       - 'tests/test_production_execution_trust_bootstrap.py'
       - 'tests/test_production_aws_backup_bootstrap.py'
       - 'tests/test_production_ddns_reconcile.py'
+      - 'scripts/ci/g5_g6_evidence_acceptance.py'
+      - 'tests/test_g5_g6_evidence_acceptance.py'
       - 'tests/test_production_internal_dns_contract.py'
       - 'tests/test_production_network_identity.py'
       - '.github/workflows/production-host-reality.yml'
@@ -82,6 +84,7 @@ jobs:
             tests/test_production_live_workflow.py \
             tests/test_production_runner_bootstrap_contract.py \
             tests/test_production_ddns_reconcile.py \
+            tests/test_g5_g6_evidence_acceptance.py \
             tests/test_production_internal_dns_contract.py \
             tests/test_production_network_identity.py \
             tests/test_production_secret_init.py \
