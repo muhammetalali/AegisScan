@@ -79,6 +79,8 @@ def assess_g5(evidence: dict[str, Any] | None, *, now: datetime) -> dict[str, An
     valid_events.sort(key=lambda v: v[0])
     consecutive = any(
         before[1]["scheduler_instance_id"] == after[1]["scheduler_instance_id"]
+        and before[1]["backup_id"] != after[1]["backup_id"]
+        and before[1]["manifest_version_id"] != after[1]["manifest_version_id"]
         and abs((after[0] - before[0]).total_seconds() - 86400) <= TIMING_TOLERANCE_SECONDS
         for before, after in zip(valid_events, valid_events[1:])
     )
