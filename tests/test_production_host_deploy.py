@@ -191,6 +191,66 @@ def test_backup_scoped_route_is_checked_without_reloading_when_healthy(tmp_path,
     assert all("reload" not in argv for argv in calls)
 
 
+def test_backup_scoped_route_starts_enabled_inactive_unit_before_tls_probe(tmp_path, monkeypatch):
+    helper = tmp_path / "backup-egress-route.sh"
+    helper.write_text("existing helper", encoding="utf-8")
+    unit_file = tmp_path / "aegisscan-backup-egress-route.service"
+    unit_file.write_text("existing unit", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit_file)
+    calls = []
+    active_checks = 0
+
+    def run(argv, **kwargs):
+        nonlocal active_checks
+        call = list(argv)
+        calls.append(call)
+        if call == ["systemctl", "is-active", "--quiet", "aegisscan-backup-egress-route.service"]:
+            active_checks += 1
+            if active_checks == 1:
+                raise subprocess.CalledProcessError(3, call)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    assert deploy._reconcile_existing_backup_egress_route({}) is True
+    assert calls[:5] == [
+        ["systemctl", "is-active", "--quiet", "aegisscan-backup-egress-route.service"],
+        ["systemctl", "is-enabled", "--quiet", "aegisscan-backup-egress-route.service"],
+        ["systemctl", "start", "aegisscan-backup-egress-route.service"],
+        ["systemctl", "is-active", "--quiet", "aegisscan-backup-egress-route.service"],
+        [str(helper), "check"],
+    ]
+    assert calls[5][:4] == ["docker", "exec", "aegis-remote-backup", "python3"]
+    assert all(argv[:2] != ["ip", "route"] for argv in calls)
+
+
+def test_backup_scoped_route_does_not_start_disabled_unit(tmp_path, monkeypatch):
+    helper = tmp_path / "backup-egress-route.sh"
+    helper.write_text("existing helper", encoding="utf-8")
+    unit_file = tmp_path / "aegisscan-backup-egress-route.service"
+    unit_file.write_text("existing unit", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit_file)
+    calls = []
+
+    def run(argv, **kwargs):
+        call = list(argv)
+        calls.append(call)
+        if call == ["systemctl", "is-active", "--quiet", "aegisscan-backup-egress-route.service"]:
+            raise subprocess.CalledProcessError(3, call)
+        if call == ["systemctl", "is-enabled", "--quiet", "aegisscan-backup-egress-route.service"]:
+            raise subprocess.CalledProcessError(1, call)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    with pytest.raises(deploy.DeployError, match="not enabled for boot"):
+        deploy._reconcile_existing_backup_egress_route({})
+    assert calls == [
+        ["systemctl", "is-active", "--quiet", "aegisscan-backup-egress-route.service"],
+        ["systemctl", "is-enabled", "--quiet", "aegisscan-backup-egress-route.service"],
+    ]
+
+
 def test_backup_scoped_route_recovers_drift_once_then_probes_tls(tmp_path, monkeypatch):
     helper = tmp_path / "backup-egress-route.sh"
     helper.write_text("existing helper", encoding="utf-8")

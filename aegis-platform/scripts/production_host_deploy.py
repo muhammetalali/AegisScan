@@ -830,8 +830,28 @@ def _reconcile_existing_backup_egress_route(deployment_env: dict[str, str]) -> b
     if not helper.is_file() or not unit_file.is_file():
         raise DeployError("existing production backup-egress route installation is incomplete")
 
-    _run(["systemctl", "is-active", "--quiet", unit], timeout=20)
     recovered = False
+    try:
+        _run(["systemctl", "is-active", "--quiet", unit], timeout=20)
+    except subprocess.CalledProcessError:
+        # The route is a preinstalled, boot-enabled oneshot unit. A stopped
+        # unit must be started before the backup preflight; never synthesize
+        # policy routes or touch the host's general default route here.
+        try:
+            _run(["systemctl", "is-enabled", "--quiet", unit], timeout=20)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise DeployError(
+                "existing production backup-egress route service is inactive and not enabled for boot"
+            ) from exc
+        try:
+            _run(["systemctl", "start", unit], timeout=60)
+            _run(["systemctl", "is-active", "--quiet", unit], timeout=20)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise DeployError(
+                "existing production backup-egress route service could not be started"
+            ) from exc
+        recovered = True
+
     try:
         _run([str(helper), "check"], timeout=30)
     except subprocess.CalledProcessError:
