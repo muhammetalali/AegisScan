@@ -16,7 +16,7 @@ def _event(time, instance="schedule-1", backup="backup-1", origin="schedule"):
     return {
         "completed_at": time.isoformat(), "scheduler_instance_id": instance,
         "origin": origin, "status": "success", "backup_id": backup,
-        "manifest_version_id": "manifest-v1", "object_version_id": "object-v1",
+        "manifest_version_id": "manifest-v1" if backup == "backup-1" else "manifest-v0", "object_version_id": "object-v1" if backup == "backup-1" else "object-v0",
         "source_sha256": "b" * 64,
     }
 
@@ -26,7 +26,7 @@ def _g5():
         "release_sha": SHA,
         "interval_seconds": 86400,
         "automatic_backup_events": [
-            _event(t - timedelta(days=1)), _event(t)],
+            _event(t - timedelta(days=1), backup="backup-0"), _event(t)],
         "restore_verification": {
             "status": "PASS", "postgres_restore_verified": True,
             "backup_id": "backup-1", "manifest_version_id": "manifest-v1",
@@ -135,3 +135,10 @@ def test_release_gate_not_complete_if_either_g5_or_g6_pending():
     assert result["g5"]["status"] == "ACCEPTED"
     assert result["g6"]["status"] == "BLOCKED_SOURCE"
     assert result["project_complete"] is False
+
+def test_g5_rejects_replayed_same_backup_as_fake_second_cycle():
+    evidence = _g5()
+    evidence["automatic_backup_events"][0]["backup_id"] = "backup-1"
+    evidence["automatic_backup_events"][0]["manifest_version_id"] = "manifest-v1"
+    result = gate.assess_g5(evidence, now=NOW)
+    assert "24H_UNINTERRUPTED_AUTOMATIC_BACKUP_CYCLE_NOT_PROVED" in result["gaps"]
