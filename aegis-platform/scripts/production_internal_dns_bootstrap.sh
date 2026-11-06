@@ -7,6 +7,147 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 PLATFORM_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+# A separately authorized host-runtime-only reconciliation. The regular DNS
+# installer below changes Netplan and BIND and must NEVER be used merely to
+# refresh an already-running DDNS executable. This mode reuses that installer
+# without touching network, firewall, trust, DNS zones or systemd unit files.
+RUNTIME_ONLY="${AEGIS_DDNS_RUNTIME_ONLY:-0}"
+case "$RUNTIME_ONLY" in
+  0|1) ;;
+  *) echo "AEGIS_DDNS_RUNTIME_ONLY must be 0 or 1" >&2; exit 1 ;;
+esac
+if [ "$RUNTIME_ONLY" = 1 ]; then
+  REPOSITORY_DIR="$(CDPATH= cd -- "$PLATFORM_DIR/.." && pwd)"
+  EXPECTED_COMMIT="${AEGIS_DDNS_EXPECTED_COMMIT:-}"
+  case "$EXPECTED_COMMIT" in
+    *[!0-9a-f]*|'') echo "expected exact lowercase release SHA is mandatory" >&2; exit 1 ;;
+  esac
+  if [ "${#EXPECTED_COMMIT}" -ne 40 ]; then
+    echo "expected exact 40-character release SHA is mandatory" >&2; exit 1
+  fi
+  for required in git python3 install cmp cp mv mktemp stat systemctl; do
+    command -v "$required" >/dev/null 2>&1 || {
+      echo "required runtime sync tool missing: $required" >&2
+      exit 1
+    }
+  done
+  HEAD="$(git -c safe.directory="$REPOSITORY_DIR" -C "$REPOSITORY_DIR" rev-parse HEAD)"
+  if [ "$HEAD" != "$EXPECTED_COMMIT" ] ||
+     [ -n "$(git -c safe.directory="$REPOSITORY_DIR" -C "$REPOSITORY_DIR" status --porcelain)" ]; then
+    echo "runtime sync requires clean, exact approved production release HEAD" >&2
+    exit 1
+  fi
+  OLD_DDNS=/usr/local/sbin/aegisscan-ddns-reconcile
+  INSTALLED_ID=/usr/local/sbin/production_network_identity.py
+  SOURCE_DDNS="$PLATFORM_DIR/scripts/production_ddns_reconcile.py"
+  SOURCE_ID="$PLATFORM_DIR/scripts/production_network_identity.py"
+  for candidate in "$SOURCE_DDNS" "$SOURCE_ID" "$OLD_DDNS"; do
+    if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then
+      echo "runtime sync source/current binary missing or symlinked" >&2
+      exit 1
+    fi
+  done
+  if [ -e "$INSTALLED_ID" ] && { [ ! -f "$INSTALLED_ID" ] || [ -L "$INSTALLED_ID" ]; }; then
+    echo "installed network identity is not a regular non-symlinked file" >&2
+    exit 1
+  fi
+  if [ "$(stat -c '%u' "$OLD_DDNS")" != 0 ] ||
+     { [ -e "$INSTALLED_ID" ] && [ "$(stat -c '%u' "$INSTALLED_ID")" != 0 ]; }; then
+    echo "runtime sync refuses non-root-owned installed executable" >&2
+    exit 1
+  fi
+  systemctl is-active --quiet named.service
+  systemctl is-active --quiet aegisscan-ddns-reconcile.timer
+  # Current kernel DHCP identity must agree with the current authoritative A
+  # *before* touching either root-installed executable. This is a read-only
+  # import of the already tracked code, not a signed DNS update.
+  BEFORE_IP="$(
+    PYTHONPATH="$PLATFORM_DIR/scripts" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYRUNTIME'
+import production_ddns_reconcile as ddns
+identity = ddns.discover_bound_dhcp_identity()
+if ddns.authoritative_addresses() != [identity[1]]:
+    raise SystemExit("current DHCP address and authoritative DNS A differ")
+print(identity[1])
+PYRUNTIME
+  )"
+  if cmp -s "$SOURCE_DDNS" "$OLD_DDNS" &&
+     [ -f "$INSTALLED_ID" ] && cmp -s "$SOURCE_ID" "$INSTALLED_ID"; then
+    echo "G4_DDNS_RUNTIME_SYNC=ALREADY_CURRENT"
+    exit 0
+  fi
+
+  ROOT_BACKUPS=/var/lib/aegisscan/backups/dns-config
+  if [ ! -d "$ROOT_BACKUPS" ] || [ "$(stat -c '%u' "$ROOT_BACKUPS")" != 0 ]; then
+    echo "root-owned existing DNS backup directory is required" >&2
+    exit 1
+  fi
+  BACKUP_DIR="$(mktemp -d "$ROOT_BACKUPS/runtime-XXXXXXXX")"
+  chmod 0700 "$BACKUP_DIR"
+  cp -p "$OLD_DDNS" "$BACKUP_DIR/ddns-before"
+  if [ -f "$INSTALLED_ID" ]; then
+    cp -p "$INSTALLED_ID" "$BACKUP_DIR/identity-before"
+  fi
+  TEMP_ID="$(mktemp /usr/local/sbin/.aegis-ddns-identity-XXXXXXXX)"
+  TEMP_DDNS="$(mktemp /usr/local/sbin/.aegis-ddns-runtime-XXXXXXXX)"
+  PROMOTED=0
+  COMMITTED=0
+  runtime_rollback() {
+    previous_status=$?
+    trap - EXIT
+    rm -f "$TEMP_ID" "$TEMP_DDNS"
+    if [ "$PROMOTED" = 1 ] && [ "$COMMITTED" != 1 ]; then
+      cp -p "$BACKUP_DIR/ddns-before" "$TEMP_DDNS"
+      mv -f "$TEMP_DDNS" "$OLD_DDNS"
+      if [ -f "$BACKUP_DIR/identity-before" ]; then
+        cp -p "$BACKUP_DIR/identity-before" "$TEMP_ID"
+        mv -f "$TEMP_ID" "$INSTALLED_ID"
+      else
+        rm -f "$INSTALLED_ID"
+      fi
+      systemctl start aegisscan-ddns-reconcile.service || true
+      echo "G4_DDNS_RUNTIME_SYNC=ROLLED_BACK" >&2
+    fi
+    exit "$previous_status"
+  }
+  trap 'runtime_rollback' EXIT
+  trap 'exit 1' HUP INT TERM
+  install -o root -g root -m 0755 "$SOURCE_ID" "$TEMP_ID"
+  install -o root -g root -m 0750 "$SOURCE_DDNS" "$TEMP_DDNS"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$TEMP_ID" "$TEMP_DDNS" <<'PYCOMPILE'
+from pathlib import Path
+import sys
+for name in sys.argv[1:]:
+    compile(Path(name).read_text(), name, "exec")
+PYCOMPILE
+  PROMOTED=1
+  # The old reconciler needs no import; the new one is promoted only after
+  # its current helper is installed. Both mv operations are atomic per file.
+  mv -f "$TEMP_ID" "$INSTALLED_ID"
+  mv -f "$TEMP_DDNS" "$OLD_DDNS"
+  cmp -s "$SOURCE_ID" "$INSTALLED_ID"
+  cmp -s "$SOURCE_DDNS" "$OLD_DDNS"
+  systemctl start aegisscan-ddns-reconcile.service
+  systemctl is-active --quiet aegisscan-ddns-reconcile.timer
+  AFTER_IP="$(
+    PYTHONPATH="$PLATFORM_DIR/scripts" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYRUNTIME'
+import production_ddns_reconcile as ddns
+identity = ddns.discover_bound_dhcp_identity()
+if ddns.authoritative_addresses() != [identity[1]]:
+    raise SystemExit("runtime sync postcheck DNS mismatch")
+print(identity[1])
+PYRUNTIME
+  )"
+  if [ "$AFTER_IP" != "$BEFORE_IP" ]; then
+    echo "DHCP address changed during runtime-only reconciliation" >&2
+    exit 1
+  fi
+  COMMITTED=1
+  echo "G4_DDNS_RUNTIME_SYNC=PASS"
+  echo "RELEASE_SHA=$EXPECTED_COMMIT"
+  echo "ROOT_ONLY_BACKUP=$BACKUP_DIR"
+  exit 0
+fi
 INTERFACE="${AEGIS_DDNS_INTERFACE:-ens33}"
 INTERNAL_CIDR="${AEGIS_DDNS_NETWORK:-192.168.49.0/24}"
 DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
