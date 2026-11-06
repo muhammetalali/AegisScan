@@ -40,8 +40,8 @@ if [ "$RUNTIME_ONLY" = 1 ]; then
   fi
   OLD_DDNS=/usr/local/sbin/aegisscan-ddns-reconcile
   INSTALLED_ID=/usr/local/sbin/production_network_identity.py
-  SOURCE_DDNS="$PLATFORM_DIR/scripts/production_ddns_reconcile.py"
   SOURCE_ID="$PLATFORM_DIR/scripts/production_network_identity.py"
+  SOURCE_DDNS="$PLATFORM_DIR/scripts/production_ddns_reconcile.py"
   for candidate in "$SOURCE_DDNS" "$SOURCE_ID" "$OLD_DDNS"; do
     if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then
       echo "runtime sync source/current binary missing or symlinked" >&2
