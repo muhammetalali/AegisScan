@@ -106,6 +106,22 @@ def assess_g5(evidence: dict[str, Any] | None, *, now: datetime) -> dict[str, An
     )
     if not restore_valid:
         gaps.append("EXACT_CURRENT_BACKUP_ISOLATED_RESTORE_NOT_PROVED")
+    # A PostgreSQL table restore is not an application-platform recovery.
+    # Require distinct, safe-isolation evidence for all mandatory services.
+    platform = evidence.get("platform_recovery")
+    required_services = {"postgres", "redis", "django", "fastapi", "scanner", "frontend"}
+    platform_ok = (
+        isinstance(platform, dict)
+        and platform.get("status") == "PASS"
+        and platform.get("release_sha") == expected_release
+        and platform.get("isolated_environment") is True
+        and platform.get("original_production_unchanged") is True
+        and _number(platform.get("elapsed_seconds"))
+        and isinstance(platform.get("services_verified"), list)
+        and required_services.issubset(set(str(x) for x in platform["services_verified"]))
+    )
+    if not platform_ok:
+        gaps.append("FULL_PLATFORM_ISOLATED_RECOVERY_NOT_PROVED")
     contract = evidence.get("approved_recovery_contract")
     approved = isinstance(contract, dict) and contract.get("owner_approved") is True
     rpo = contract.get("rpo_seconds") if approved else None
@@ -203,6 +219,26 @@ def assess_g6(evidence: dict[str, Any] | None, *, release_sha: str) -> dict[str,
                          for x in matrix if isinstance(x, dict)))
     if not matrix_ok:
         gaps.append("107_REQUIREMENTS_EXACT_SHA_TEST_CI_RUNTIME_UAT_ROLLBACK_MAPPING_INCOMPLETE")
+    # The 100 decisions are a distinct audit ledger, not the missing 107.
+    decision_matrix = evidence.get("decision_evidence_matrix")
+    decisions_ok = False
+    if good_100 and trusted_100 and isinstance(decision_matrix, list) and len(decision_matrix) == 100:
+        expected_codes = {x["code"] for x in decisions}
+        observed_codes = [x.get("code") for x in decision_matrix if isinstance(x, dict)]
+        decisions_ok = (
+            len(observed_codes) == 100
+            and len(set(observed_codes)) == 100
+            and set(observed_codes) == expected_codes
+            and all(
+                x.get("release_sha") == release_sha
+                and all(_required_str(x.get(field)) for field in
+                    ("test_ref", "ci_run_ref", "production_runtime_ref",
+                     "uat_actor_ref", "rollback_evidence_ref"))
+                and x.get("independently_verified") is True
+                for x in decision_matrix if isinstance(x, dict))
+        )
+    if not decisions_ok:
+        gaps.append("100_OWNER_DECISIONS_EXACT_SHA_EVIDENCE_MAPPING_INCOMPLETE")
     approval = evidence.get("owner_signoff")
     if not (isinstance(approval, dict) and approval.get("independently_verified") is True
             and _required_str(approval.get("signed_artifact_ref"))
