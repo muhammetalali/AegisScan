@@ -258,8 +258,12 @@ def test_ddns_installer_deploys_existing_dhcp_identity_sibling_before_reconciler
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
     network_copy = '"$PLATFORM_DIR/scripts/production_network_identity.py"'
     reconciler_copy = '"$PLATFORM_DIR/scripts/production_ddns_reconcile.py"'
-    assert script.count(network_copy) == 1
+    # Both the runtime-only repair and the full bootstrap must stage the
+    # discovery helper before promoting the reconciler that imports it.
+    assert script.count(network_copy) == 2
+    assert script.count(reconciler_copy) == 2
     assert script.index(network_copy) < script.index(reconciler_copy)
+    assert script.rindex(network_copy) < script.rindex(reconciler_copy)
     assert '/usr/local/sbin/production_network_identity.py' in script
     ddns = (ROOT / "aegis-platform/scripts/production_ddns_reconcile.py").read_text()
     assert 'from production_network_identity import (' in ddns
