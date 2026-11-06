@@ -146,7 +146,7 @@ def assess_g5(evidence: dict[str, Any] | None, *, now: datetime) -> dict[str, An
 def assess_g6(evidence: dict[str, Any] | None, *, release_sha: str) -> dict[str, Any]:
     gaps: list[str] = []
     if not isinstance(evidence, dict):
-        return {"status": "BLOCKED_SOURCE", "gaps": ["LITERAL_ORIGINAL_107_NOT_AVAILABLE"]}
+        return {"status": "BLOCKED_SOURCE", "gaps": ["LITERAL_ORIGINAL_107_NOT_AVAILABLE"], "literal_107_count": 0, "distinct_decision_100_count": 0, "no_invented_requirement_text": True, "project_complete": False}
     original = evidence.get("original_requirements_107")
     decisions = evidence.get("original_decisions_100")
     matrix = evidence.get("requirement_evidence_matrix")
