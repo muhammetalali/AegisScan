@@ -35,6 +35,10 @@ def _g5():
             "plaintext_scope": "ephemeral-backup-container-tmpfs",
             "production_database_modified": False, "elapsed_seconds": 120,
         },
+        "platform_recovery": {
+            "status": "PASS", "release_sha": SHA, "isolated_environment": True,
+            "original_production_unchanged": True, "elapsed_seconds": 600,
+            "services_verified": ["postgres", "redis", "django", "fastapi", "scanner", "frontend"]},
         "approved_recovery_contract": {
             "owner_approved": True, "rpo_seconds": 7200, "rto_seconds": 1800},
         "inventory": {
@@ -62,6 +66,9 @@ def _g6():
         "original_requirements_107": requirements,
         "original_decisions_100": decisions,
         "requirement_evidence_matrix": matrix,
+        "decision_evidence_matrix": [
+            {**matrix[0], "code": x["code"]} for x in decisions
+        ],
         "provenance": {"owner_authenticated_source": True,
                        "original_107_source_sha256": "c" * 64},
         "owner_signoff": {"independently_verified": True,
@@ -143,3 +150,15 @@ def test_g5_rejects_replayed_same_backup_as_fake_second_cycle():
     evidence["automatic_backup_events"][0]["manifest_version_id"] = "manifest-v1"
     result = gate.assess_g5(evidence, now=NOW)
     assert "24H_UNINTERRUPTED_AUTOMATIC_BACKUP_CYCLE_NOT_PROVED" in result["gaps"]
+
+def test_g5_refuses_to_equate_postgres_restore_with_full_platform_restore():
+    evidence = _g5()
+    evidence.pop("platform_recovery")
+    result = gate.assess_g5(evidence, now=NOW)
+    assert "FULL_PLATFORM_ISOLATED_RECOVERY_NOT_PROVED" in result["gaps"]
+
+def test_g6_requires_individual_evidence_for_all_hundred_owner_decisions():
+    evidence = _g6()
+    evidence["decision_evidence_matrix"].pop()
+    result = gate.assess_g6(evidence, release_sha=SHA)
+    assert "100_OWNER_DECISIONS_EXACT_SHA_EVIDENCE_MAPPING_INCOMPLETE" in result["gaps"]
