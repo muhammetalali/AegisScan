@@ -142,3 +142,96 @@ def test_cidr_nmap_scope_limits_and_no_dynamic_argument_injection():
         else:
             raise AssertionError(f'An unsafe CIDR command was accepted: {value!r}')
     assert command('example.internal') == ['/usr/bin/nmap', '-Pn', '-sV', '-oX', '-', '--', 'example.internal']
+
+
+def test_bound_exact_nmap_validation_port_keeps_existing_provider_not_new_capability():
+    ns = runpy.run_path(str(KALI / 'runner' / 'network_service.py'))
+    request = {
+        'schema_version': 1,
+        'execution_ref': 'validation:abc123:nmap',
+        'authorization_ref': 'authorized-asset-123',
+        'scope_ref': 'project:proj:asset:asset',
+        'control_token': 'a' * 64,
+        'capability_id': 'network.nmap',
+        'target': '192.0.2.10',
+        'options': {'validation_port': 443},
+        'timeout_seconds': 60,
+    }
+    runtime = {'dispatch_capabilities': ['network.nmap']}
+    validated = ns['_validate_request'](request, runtime)
+    assert validated['validation_port'] == 443
+    assert ns['_nmap_command'](
+        validated['target'], validation_port=validated['validation_port']
+    ) == ['/usr/bin/nmap', '-Pn', '-sV', '-p', '443', '-oX', '-', '--', '192.0.2.10']
+    assert ns['_nmap_command']('192.0.2.10') == [
+        '/usr/bin/nmap', '-Pn', '-sV', '-oX', '-', '--', '192.0.2.10',
+    ]
+
+
+def test_exact_nmap_port_denies_unbound_cidr_arbitrary_options_and_injection():
+    ns = runpy.run_path(str(KALI / 'runner' / 'network_service.py'))
+    runtime = {'dispatch_capabilities': ['network.nmap']}
+    base = {
+        'schema_version': 1,
+        'execution_ref': 'validation:abc123:nmap',
+        'authorization_ref': 'authorized-asset-123',
+        'scope_ref': 'project:proj:asset:asset',
+        'control_token': 'a' * 64,
+        'capability_id': 'network.nmap',
+        'target': '192.0.2.10',
+        'options': {'validation_port': 443},
+        'timeout_seconds': 60,
+    }
+    cases = [
+        {'options': {'validation_port': True}},
+        {'options': {'validation_port': 0}},
+        {'options': {'validation_port': 65536}},
+        {'options': {'validation_port': '443'}},
+        {'options': {'validation_port': 443, 'argv': ['--script', 'all']}},
+        {'execution_ref': 'scan:abc123'},
+        {'target': '192.0.2.0/24'},
+    ]
+    for changes in cases:
+        request = dict(base, **changes)
+        try:
+            ns['_validate_request'](request, runtime)
+        except ns['ProtocolError']:
+            pass
+        else:
+            raise AssertionError(f'Unsafe Nmap exact validation accepted: {changes!r}')
+    for invalid in (True, '22', 0, 65536):
+        try:
+            ns['_nmap_command']('192.0.2.10', validation_port=invalid)
+        except ns['ProtocolError']:
+            pass
+        else:
+            raise AssertionError('Nmap CLI accepted an invalid exact validation port')
+    try:
+        ns['_nmap_command']('192.0.2.0/24', validation_port=443)
+    except ns['ProtocolError']:
+        pass
+    else:
+        raise AssertionError('Nmap exact validation accepted a CIDR')
+
+
+def test_exact_nmap_client_denies_invalid_port_before_any_remote_execution():
+    import importlib.util
+    path = REPO / 'aegis-platform' / 'backend' / 'fastapi_app' / 'services' / 'kali_nmap_provider.py'
+    spec = importlib.util.spec_from_file_location('g3_kali_nmap_client', path)
+    assert spec and spec.loader
+    import sys
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    for bad in (True, '443', 0, 65536):
+        try:
+            module.execute_kali_nmap(
+                target='192.0.2.10', timeout_seconds=60,
+                execution_ref='validation:check:nmap', authorization_ref='authorization',
+                scope_ref='project:p:asset:a', state_getter=lambda: 'running',
+                validation_port=bad,
+            )
+        except module.KaliNmapProviderError:
+            pass
+        else:
+            raise AssertionError('Unbounded client validation port reached provider')
