@@ -190,8 +190,19 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
     if not _TOKEN_RE.fullmatch(token):
         raise ProtocolError('control_token is missing or invalid')
     options = payload.get('options', {})
-    if not isinstance(options, dict) or options:
+    if not isinstance(options, dict):
         raise ProtocolError('network.nmap does not accept provider options')
+    validation_port = None
+    if options:
+        if set(options) != {'validation_port'}:
+            raise ProtocolError('network.nmap does not accept provider options')
+        validation_port = options['validation_port']
+        if isinstance(validation_port, bool) or not isinstance(validation_port, int) or not 1 <= validation_port <= 65535:
+            raise ProtocolError('exact Nmap validation port must be an integer between 1 and 65535')
+        if not str(payload.get('execution_ref') or '').startswith('validation:'):
+            raise ProtocolError('exact Nmap port is reserved for a bound finding validation execution')
+        if '/' in _canonical_target(payload.get('target')):
+            raise ProtocolError('exact Nmap validation requires a single host, not a CIDR')
     raw_timeout = payload.get('timeout_seconds')
     if isinstance(raw_timeout, bool):
         raise ProtocolError('timeout_seconds must be an integer')
@@ -201,7 +212,7 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
         raise ProtocolError('timeout_seconds must be an integer') from exc
     if timeout < 5 or timeout > 300:
         raise ProtocolError('timeout_seconds must be between 5 and 300')
-    return {
+    request = {
         'execution_ref': _bounded_ref('execution_ref', payload.get('execution_ref')),
         'authorization_ref': _bounded_ref('authorization_ref', payload.get('authorization_ref')),
         'scope_ref': _bounded_ref('scope_ref', payload.get('scope_ref')),
@@ -210,6 +221,9 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
         'target': _canonical_target(payload.get('target')),
         'timeout_seconds': timeout,
     }
+    if validation_port is not None:
+        request['validation_port'] = validation_port
+    return request
 
 
 def _sanitized_env() -> dict[str, str]:
@@ -312,7 +326,7 @@ def _control_execution(execution_ref: str, token: str, state: str) -> str:
         return record.state
 
 
-def _nmap_command(target: str) -> list[str]:
+def _nmap_command(target: str, *, validation_port: int | None = None) -> list[str]:
     """Choose bounded host discovery for CIDR; preserve exact host parity.
 
     Nmap's default host-discovery stage runs before -sV for a network.
@@ -321,6 +335,12 @@ def _nmap_command(target: str) -> list[str]:
     deadline/cancel/retry safeguards remain authoritative.
     """
     canonical = _canonical_target(target)
+    if validation_port is not None:
+        if isinstance(validation_port, bool) or not isinstance(validation_port, int) or not 1 <= validation_port <= 65535:
+            raise ProtocolError('exact Nmap validation port must be an integer between 1 and 65535')
+        if '/' in canonical:
+            raise ProtocolError('exact Nmap validation requires a single host, not a CIDR')
+        return [NMAP, '-Pn', '-sV', '-p', str(validation_port), '-oX', '-', '--', canonical]
     if '/' not in canonical:
         return [NMAP, '-Pn', '-sV', '-oX', '-', '--', canonical]
     network = ipaddress.ip_network(canonical, strict=True)
@@ -338,6 +358,8 @@ def _nmap_command(target: str) -> list[str]:
 def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
     os.makedirs('/tmp/aegis-home', mode=0o700, exist_ok=True)
     command = _nmap_command(request['target'])
+    if request.get('validation_port') is not None:
+        command = _nmap_command(request['target'], validation_port=request['validation_port'])
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     overflow = threading.Event()
