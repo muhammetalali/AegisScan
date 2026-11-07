@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
@@ -17,6 +15,8 @@ from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_validation_authorization
 from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.kali_nmap_provider import execute_kali_nmap, nmap_provider_decision
+from fastapi_app.services.nmap_execution_provider import legacy_nmap_disabled
 
 
 def _string(value: Any) -> str:
@@ -60,18 +60,41 @@ def _expected_signature(raw_data: dict[str, Any]) -> tuple[int, dict[str, str]]:
     return port, signature
 
 
-def _run_nmap_exact(target: str, port: int, timeout: int) -> tuple[int, str, str]:
-    executable = shutil.which('nmap')
-    if not executable:
-        raise RuntimeError('Nmap is not installed on the worker')
-    completed = subprocess.run(
-        [executable, '-sV', '-p', str(port), '-oX', '-', '--', target],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
+def _run_nmap_exact(
+    target: str,
+    port: int,
+    timeout: int,
+    *,
+    authorization_ref: str,
+    scope_ref: str,
+    execution_ref: str,
+    state_getter: Callable[[], str],
+) -> tuple[int, str, str, dict[str, Any]]:
+    """Use the EXISTING attested Kali Nmap provider, never an unpinned worker binary."""
+    decision = nmap_provider_decision(routing_key=execution_ref)
+    if not legacy_nmap_disabled() or decision.mode != 'default-kali' or decision.selected_provider != 'kali':
+        raise RuntimeError('Exact finding validation requires governed default-kali Nmap and legacy retirement')
+    result = execute_kali_nmap(
+        target=target,
+        timeout_seconds=timeout,
+        execution_ref=execution_ref,
+        authorization_ref=authorization_ref,
+        scope_ref=scope_ref,
+        state_getter=state_getter,
+        validation_port=port,
     )
-    return completed.returncode, completed.stdout, completed.stderr
+    return int(result['exit_code']), str(result['stdout']), str(result['stderr']), dict(result['runtime'])
+
+
+def _exact_port_covered(parsed: dict[str, Any], port: int, protocol: str) -> bool:
+    """A missing/ambiguous target port is INDETERMINATE, never proof of a fix."""
+    return any(
+        isinstance(observed, dict)
+        and str(observed.get('port', observed.get('portid', ''))) == str(port)
+        and _string(observed.get('protocol')).lower() == protocol
+        for host in parsed.get('hosts', []) if isinstance(host, dict)
+        for observed in host.get('ports', [])
+    )
 
 
 def _matches_signature(parsed: dict[str, Any], expected_port: int, signature: dict[str, str]) -> tuple[bool, dict[str, Any] | None]:
@@ -145,8 +168,20 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         validation.progress = 20
         validation.save(update_fields=['current_phase', 'progress'])
 
-        exit_code, evidence_raw, stderr = _run_nmap_exact(target, port, timeout=300)
+        exit_code, evidence_raw, stderr, provider_runtime = _run_nmap_exact(
+            target, port, timeout=300,
+            authorization_ref=str(authorization.id),
+            scope_ref=f'project:{finding.project_id}:asset:{finding.asset_id}',
+            execution_ref=f'validation:{validation_id}:nmap',
+            state_getter=lambda: (
+                'cancelled' if ValidationRun.objects.filter(
+                    pk=validation_id, status=ValidationRun.Status.CANCELLED
+                ).exists() else 'running'
+            ),
+        )
         parsed = parse_nmap_xml(evidence_raw) if evidence_raw.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
+        if exit_code == 0 and not _exact_port_covered(parsed, port, signature['protocol']):
+            raise ValueError('Exact Nmap target port was not observed: remediation verdict is indeterminate')
         finding_present, observed = _matches_signature(parsed, port, signature)
         result = {
             'tool': 'nmap',
@@ -157,6 +192,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'observed': observed,
             'parsed': parsed,
             'finding_present': finding_present,
+            'runtime_provenance': provider_runtime,
         }
 
         now = datetime.now(timezone.utc)
@@ -184,6 +220,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                         'port': port,
                         'expected': signature,
                         'observed': observed,
+                        'runtime_provenance': provider_runtime,
                         **authorization_snapshot(authorization),
                     },
                     'collected_by': validation.user,

@@ -310,10 +310,19 @@ def execute_kali_nmap(
     scope_ref: str,
     state_getter: Callable[[], str] | None,
     poll_interval: float = 1.0,
+    validation_port: int | None = None,
 ) -> dict[str, Any]:
     for name, value in (('execution_ref', execution_ref), ('authorization_ref', authorization_ref), ('scope_ref', scope_ref)):
         if not value or len(value) > 255:
             raise KaliNmapProviderError(f'{name} is required for Kali Nmap execution')
+
+    options: dict[str, int] = {}
+    if validation_port is not None:
+        if isinstance(validation_port, bool) or not isinstance(validation_port, int) or not 1 <= validation_port <= 65535:
+            raise KaliNmapProviderError('exact Nmap validation port must be an integer between 1 and 65535')
+        if not execution_ref.startswith('validation:') or '/' in target:
+            raise KaliNmapProviderError('exact Nmap port requires a bound single-host validation reference')
+        options['validation_port'] = validation_port
 
     expected = _trusted_expected_provenance()
     _preflight_runtime_attestation(expected)
@@ -326,7 +335,7 @@ def execute_kali_nmap(
         'control_token': control_token,
         'capability_id': 'network.nmap',
         'target': target,
-        'options': {},
+        'options': options,
         'timeout_seconds': int(timeout_seconds),
     }
     holder: dict[str, Any] = {}
