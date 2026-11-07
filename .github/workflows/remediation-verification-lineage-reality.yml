@@ -76,6 +76,8 @@ jobs:
           --junitxml=remediation-verification-results.xml
           fastapi_app/services/test_remediation_verification_lineage.py
           fastapi_app/services/test_decision_action_orchestration.py
+          fastapi_app/tasks/test_finding_validation.py
+          ../kali/tests/test_network_provider_contract.py
       - name: Retain verification evidence
         if: always()
         uses: actions/upload-artifact@v4
