@@ -126,7 +126,9 @@ def _stub_nmap(monkeypatch, raw_xml):
     monkeypatch.setattr(
         nmap_finding_validation,
         "_run_nmap_exact",
-        lambda target, port, timeout: (0, raw_xml, ""),
+        lambda target, port, timeout, **kwargs: (
+            0, raw_xml, "", {"provider": "aegis-kali-network", "provenance_authority": "control-plane-deployment-pins"}
+        ),
     )
 
 
@@ -194,10 +196,10 @@ def test_completed_validation_redelivery_is_idempotent(finding_fixture, monkeypa
     validation = _validation(user, finding)
     calls = 0
 
-    def run_once(target, port, timeout):
+    def run_once(target, port, timeout, **kwargs):
         nonlocal calls
         calls += 1
-        return 0, CLOSED_NMAP_XML, ''
+        return 0, CLOSED_NMAP_XML, '', {"provider": "aegis-kali-network"}
 
     monkeypatch.setattr(nmap_finding_validation, '_run_nmap_exact', run_once)
 
@@ -219,7 +221,7 @@ def test_nmap_validation_uses_immutable_grant_not_mutable_asset_flag(finding_fix
     finding.asset.save(update_fields=["configuration"])
     validation = _validation(user, finding)
 
-    monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", lambda *args, **kwargs: (0, CLOSED_NMAP_XML, ''))
+    monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", lambda *args, **kwargs: (0, CLOSED_NMAP_XML, '', {"provider": "aegis-kali-network"}))
     result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
     validation.refresh_from_db()
 
@@ -330,3 +332,56 @@ def test_nuclei_exact_template_revalidation_uses_governed_kali_and_persists_evid
     assert evidence.finding_id == finding.id
     assert evidence.metadata['finding_present'] is True
     assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 1
+
+
+def test_exact_nmap_validation_calls_existing_governed_kali_provider(monkeypatch):
+    monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'default-kali')
+    monkeypatch.setenv('AEGIS_NMAP_LEGACY_DISABLED', 'true')
+    called = []
+
+    def bounded(**kwargs):
+        called.append(kwargs)
+        return {'exit_code': 0, 'stdout': CLOSED_NMAP_XML, 'stderr': '',
+                'runtime': {'provider': 'aegis-kali-network'}}
+
+    monkeypatch.setattr(nmap_finding_validation, 'execute_kali_nmap', bounded)
+    result = nmap_finding_validation._run_nmap_exact(
+        '192.0.2.10', 80, 60, authorization_ref='decision-1',
+        scope_ref='project:p:asset:a', execution_ref='validation:test:nmap',
+        state_getter=lambda: 'running',
+    )
+    assert result[0] == 0 and result[3]['provider'] == 'aegis-kali-network'
+    assert len(called) == 1
+    assert called[0]['target'] == '192.0.2.10'
+    assert called[0]['validation_port'] == 80
+    assert called[0]['authorization_ref'] == 'decision-1'
+    assert called[0]['scope_ref'] == 'project:p:asset:a'
+    assert called[0]['state_getter']() == 'running'
+
+
+def test_exact_nmap_validation_no_legacy_fallback(monkeypatch):
+    monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'legacy')
+    monkeypatch.setenv('AEGIS_NMAP_LEGACY_DISABLED', 'true')
+    monkeypatch.setattr(nmap_finding_validation, 'execute_kali_nmap',
+                        lambda **kwargs: pytest.fail('provider must not run in retired legacy mode'))
+    with pytest.raises(RuntimeError, match='default-kali'):
+        nmap_finding_validation._run_nmap_exact(
+            '192.0.2.10', 80, 60, authorization_ref='decision-1',
+            scope_ref='project:p:asset:a', execution_ref='validation:test:nmap',
+            state_getter=lambda: 'running',
+        )
+
+
+@pytest.mark.django_db
+def test_exact_nmap_port_not_observed_cannot_verify_a_fix(finding_fixture, monkeypatch):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    different_port_xml = CLOSED_NMAP_XML.replace('portid="80"', 'portid="81"')
+    _stub_nmap(monkeypatch, different_port_xml)
+    with pytest.raises(ValueError, match='indeterminate'):
+        nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    validation.refresh_from_db()
+    finding.refresh_from_db()
+    assert validation.status == ValidationRun.Status.FAILED
+    assert finding.validation_status != 'verified'
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 0
