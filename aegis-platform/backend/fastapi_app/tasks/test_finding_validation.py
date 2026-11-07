@@ -50,6 +50,10 @@ def finding_fixture(db, monkeypatch):
     # server-side target allow-list. Keep that boundary explicit in this test
     # fixture instead of relying on a developer or CI environment variable.
     monkeypatch.setenv("AUTHORIZED_SCAN_TARGETS", "aegis-scan-target")
+    # The fixture uses an intentionally single-label internal service name.
+    # Explicit opt-in is confined to this isolated test; production remains
+    # fail-closed and immutable per-asset authorization is still checked.
+    monkeypatch.setenv("ALLOW_SINGLE_LABEL_SCAN_TARGETS", "true")
     user = User.objects.create_user(
         email="validation-regression@example.invalid",
         password="Strong-Test-Password-123!",
