@@ -91,27 +91,38 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'redelivered': True,
         }
 
+    # Cancellation and completion are terminal, including on Celery redelivery.
+    claimed = ValidationRun.objects.filter(pk=validation_id).exclude(
+        status__in=[ValidationRun.Status.CANCELLED, ValidationRun.Status.COMPLETED],
+    ).update(
+        status=ValidationRun.Status.RUNNING,
+        progress=10,
+        current_phase=finding.source_engine or 'validation',
+        started_at=datetime.now(timezone.utc),
+        error_message='',
+    )
+    if not claimed:
+        current_status = ValidationRun.objects.get(pk=validation_id).status
+        return {'status': current_status, 'validation_id': validation_id, 'redelivered': True}
     validation.status = ValidationRun.Status.RUNNING
-    validation.progress = 10
-    validation.current_phase = finding.source_engine or 'validation'
-    validation.started_at = datetime.now(timezone.utc)
-    validation.error_message = ''
-    validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
     asset, authorization_reason, authorization = require_bound_validation_authorization(validation)
     if authorization is None:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = authorization_reason
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
+        updated = ValidationRun.objects.filter(pk=validation_id).exclude(
+            status=ValidationRun.Status.CANCELLED,
+        ).update(
+            status=ValidationRun.Status.FAILED,
+            error_message=authorization_reason,
+            completed_at=datetime.now(timezone.utc),
+        )
+        return {'status': 'blocked' if updated else ValidationRun.Status.CANCELLED,
+                'validation_id': validation_id}
     asset_config = asset.configuration or {}
 
     engine = (validation.engines or [finding.source_engine])[0]
-    if engine != finding.source_engine:
-        raise ValueError(f'Validation engine must match finding source engine: {finding.source_engine}')
-
     try:
+        if engine != finding.source_engine:
+            raise ValueError(f'Validation engine must match finding source engine: {finding.source_engine}')
         result: dict[str, Any]
         evidence_raw: str
         stderr = ''
@@ -164,6 +175,12 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         if current_authorization is None:
             raise ValueError(authorization_reason)
         with transaction.atomic():
+            current = ValidationRun.objects.select_for_update().get(pk=validation_id)
+            if current.status == ValidationRun.Status.CANCELLED:
+                return {'status': ValidationRun.Status.CANCELLED, 'validation_id': validation_id}
+            if current.status != ValidationRun.Status.RUNNING:
+                raise ValueError('Validation state changed before evidence persistence')
+            validation = current
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('validation', validation_id, engine, 'validation_output', str(finding.id)),
                 defaults={
@@ -224,10 +241,15 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'evidence_id': result['evidence_id'],
         }
     except Exception as exc:
-        validation.status = ValidationRun.Status.FAILED
-        validation.progress = 100
-        validation.current_phase = 'failed'
-        validation.error_message = str(exc)
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'progress', 'current_phase', 'error_message', 'completed_at'])
+        updated = ValidationRun.objects.filter(pk=validation_id).exclude(
+            status=ValidationRun.Status.CANCELLED,
+        ).update(
+            status=ValidationRun.Status.FAILED,
+            progress=100,
+            current_phase='failed',
+            error_message=str(exc),
+            completed_at=datetime.now(timezone.utc),
+        )
+        if not updated:
+            return {'status': ValidationRun.Status.CANCELLED, 'validation_id': validation_id}
         raise
