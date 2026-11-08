@@ -9,6 +9,7 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -360,18 +361,24 @@ async def get_validation_progress(vid: UUID, user=Depends(get_current_user)):
 
 @sync_to_async
 def _cancel(vid: UUID, user_id: str):
-    v = _visible_validation_runs(user_id).filter(id=vid).first()
-    if not v:
+    visible = _visible_validation_runs(user_id).filter(id=vid).first()
+    if visible is None:
         return None
-    if v.status in {ValidationRun.Status.COMPLETED, ValidationRun.Status.FAILED, ValidationRun.Status.CANCELLED}:
-        return v
-    v.status = ValidationRun.Status.CANCELLED
-    v.progress = 100
-    v.current_phase = 'cancelled'
-    v.save(update_fields=['status', 'progress', 'current_phase'])
-    if v.celery_task_id:
+    # Obtain a dedicated row lock, avoiding SELECT FOR UPDATE + DISTINCT
+    # on the company-owner visibility queryset (invalid on PostgreSQL).
+    with transaction.atomic():
+        v = ValidationRun.objects.select_for_update().get(pk=visible.pk)
+        if v.status in {ValidationRun.Status.COMPLETED, ValidationRun.Status.FAILED, ValidationRun.Status.CANCELLED}:
+            return v
+        v.status = ValidationRun.Status.CANCELLED
+        v.progress = 100
+        v.current_phase = 'cancelled'
+        v.save(update_fields=['status', 'progress', 'current_phase'])
+        revoke_task_id = v.celery_task_id
+    # Do not hold the database lock while calling the Celery control plane.
+    if revoke_task_id:
         from celery.result import AsyncResult
-        AsyncResult(v.celery_task_id).revoke(terminate=False)
+        AsyncResult(revoke_task_id).revoke(terminate=False)
     return v
 
 
