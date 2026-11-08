@@ -495,3 +495,74 @@ def test_cancel_api_preserves_completed_run_and_idempotently_cancels_queued(find
     queued.refresh_from_db()
     assert queued.status == ValidationRun.Status.CANCELLED
     assert queued.current_phase == 'cancelled'
+
+
+@pytest.mark.django_db
+def test_nmap_cancel_between_preflight_and_phase_update_stays_cancelled(
+    finding_fixture, monkeypatch,
+):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    decision = validation.authorization_decision
+
+    def authorize_then_cancel(current):
+        ValidationRun.objects.filter(pk=current.pk).update(
+            status=ValidationRun.Status.CANCELLED,
+            current_phase='cancelled',
+            progress=100,
+        )
+        return finding.asset, current.target_value, decision
+
+    monkeypatch.setattr(
+        nmap_finding_validation,
+        'require_bound_validation_authorization',
+        authorize_then_cancel,
+    )
+    monkeypatch.setattr(
+        nmap_finding_validation, '_run_nmap_exact',
+        lambda *a, **kw: pytest.fail('Cancelled preflight cannot trigger Nmap'),
+    )
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.pk))
+    validation.refresh_from_db()
+    assert result['status'] == ValidationRun.Status.CANCELLED
+    assert validation.status == ValidationRun.Status.CANCELLED
+    assert validation.current_phase == 'cancelled'
+    assert validation.progress == 100
+    assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+@pytest.mark.django_db
+def test_running_nmap_delivery_does_not_dispatch_duplicate_scan(
+    finding_fixture, monkeypatch,
+):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    ValidationRun.objects.filter(pk=validation.pk).update(status=ValidationRun.Status.RUNNING)
+    monkeypatch.setattr(
+        nmap_finding_validation, '_run_nmap_exact',
+        lambda *a, **kw: pytest.fail('Running validation cannot be claimed again'),
+    )
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.pk))
+    assert result['status'] == ValidationRun.Status.RUNNING
+    assert result['redelivered'] is True
+    assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+@pytest.mark.django_db
+def test_running_nuclei_delivery_does_not_dispatch_duplicate_scan(
+    finding_fixture, monkeypatch,
+):
+    from fastapi_app.tasks import finding_validation
+    user, finding = finding_fixture
+    finding.source_engine = 'nuclei'
+    finding.save(update_fields=['source_engine'])
+    validation = _validation(user, finding)
+    ValidationRun.objects.filter(pk=validation.pk).update(status=ValidationRun.Status.RUNNING)
+    monkeypatch.setattr(
+        finding_validation, 'execute_kali_nuclei',
+        lambda **kw: pytest.fail('Running validation cannot be claimed again'),
+    )
+    result = finding_validation.validate_finding_e2e.run(str(validation.pk))
+    assert result['status'] == ValidationRun.Status.RUNNING
+    assert result['redelivered'] is True
+    assert Evidence.objects.filter(finding=finding).count() == 0
