@@ -117,12 +117,19 @@ def _matches_signature(parsed: dict[str, Any], expected_port: int, signature: di
 
 
 def _fail_validation(validation: ValidationRun, message: str, status: str = 'failed') -> dict[str, Any]:
-    validation.status = ValidationRun.Status.FAILED
-    validation.progress = 100
-    validation.current_phase = status
-    validation.error_message = message
-    validation.completed_at = datetime.now(timezone.utc)
-    validation.save(update_fields=['status', 'progress', 'current_phase', 'error_message', 'completed_at'])
+    # Cancellation is terminal: even a preflight rejection must not erase it.
+    updated = ValidationRun.objects.filter(
+        pk=validation.pk, status=ValidationRun.Status.RUNNING,
+    ).update(
+        status=ValidationRun.Status.FAILED,
+        progress=100,
+        current_phase=status,
+        error_message=message,
+        completed_at=datetime.now(timezone.utc),
+    )
+    if not updated:
+        return {'status': ValidationRun.objects.get(pk=validation.pk).status,
+                'validation_id': str(validation.id)}
     return {'status': status, 'validation_id': str(validation.id)}
 
 
@@ -146,12 +153,25 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'redelivered': True,
         }
 
+    # Compare-and-update is essential: a queued Celery delivery cannot revive
+    # a run cancelled (or completed) between the initial read and this claim.
+    claimed = ValidationRun.objects.filter(
+        pk=validation_id, status=ValidationRun.Status.QUEUED,
+    ).update(
+        status=ValidationRun.Status.RUNNING,
+        progress=10,
+        current_phase='preflight',
+        started_at=datetime.now(timezone.utc),
+        error_message='',
+    )
+    if not claimed:
+        current_status = ValidationRun.objects.get(pk=validation_id).status
+        return {
+            'status': current_status,
+            'validation_id': validation_id,
+            'redelivered': True,
+        }
     validation.status = ValidationRun.Status.RUNNING
-    validation.progress = 10
-    validation.current_phase = 'preflight'
-    validation.started_at = datetime.now(timezone.utc)
-    validation.error_message = ''
-    validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
     try:
         asset, target, authorization = require_bound_validation_authorization(validation)
@@ -164,9 +184,13 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
 
         port, signature = _expected_signature(finding.raw_data or {})
-        validation.current_phase = 'nmap'
-        validation.progress = 20
-        validation.save(update_fields=['current_phase', 'progress'])
+        # Do not revert a concurrent cancellation's terminal progress/phase.
+        phase_updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
+        ).update(current_phase='nmap', progress=20)
+        if not phase_updated:
+            return {'status': ValidationRun.objects.get(pk=validation_id).status,
+                    'validation_id': validation_id}
 
         exit_code, evidence_raw, stderr, provider_runtime = _run_nmap_exact(
             target, port, timeout=300,
@@ -200,6 +224,14 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         if current_authorization is None:
             raise ValueError(authorization_reason)
         with transaction.atomic():
+            # Serialize cancellation against evidence and remediation-verdict
+            # persistence. A late Nmap response must never revive a cancelled run.
+            current = ValidationRun.objects.select_for_update().get(pk=validation_id)
+            if current.status == ValidationRun.Status.CANCELLED:
+                return {'status': ValidationRun.Status.CANCELLED, 'validation_id': validation_id}
+            if current.status != ValidationRun.Status.RUNNING:
+                raise ValueError('Validation state changed before evidence persistence')
+            validation = current
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('validation', validation_id, 'nmap', 'validation_output', str(finding.id)),
                 defaults={
@@ -266,10 +298,19 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'evidence_id': result['evidence_id'],
         }
     except Exception as exc:
-        validation.status = ValidationRun.Status.FAILED
-        validation.progress = 100
-        validation.current_phase = 'failed'
-        validation.error_message = str(exc)
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'progress', 'current_phase', 'error_message', 'completed_at'])
+        # The provider may observe cancellation and raise. Keep CANCELLED as
+        # the terminal result; neither the exception nor a queued retry may
+        # rewrite the user's explicit decision.
+        updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
+        ).update(
+            status=ValidationRun.Status.FAILED,
+            progress=100,
+            current_phase='failed',
+            error_message=str(exc),
+            completed_at=datetime.now(timezone.utc),
+        )
+        if not updated:
+            return {'status': ValidationRun.objects.get(pk=validation_id).status,
+                    'validation_id': validation_id}
         raise

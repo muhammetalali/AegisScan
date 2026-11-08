@@ -389,3 +389,180 @@ def test_exact_nmap_port_not_observed_cannot_verify_a_fix(finding_fixture, monke
     assert validation.status == ValidationRun.Status.FAILED
     assert finding.validation_status != 'verified'
     assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('cancel_phase', ['before_start', 'after_success', 'after_error'])
+def test_nmap_cancelled_run_never_executes_or_commits_late_evidence(
+    finding_fixture, monkeypatch, cancel_phase,
+):
+    """A canceled task cannot be revived by a late/duplicate Celery delivery."""
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    if cancel_phase == 'before_start':
+        ValidationRun.objects.filter(pk=validation.pk).update(
+            status=ValidationRun.Status.CANCELLED, current_phase='cancelled',
+        )
+
+    def provider(*args, **kwargs):
+        if cancel_phase == 'before_start':
+            pytest.fail('Cancelled validation must never call a scanner')
+        ValidationRun.objects.filter(pk=validation.pk).update(
+            status=ValidationRun.Status.CANCELLED, current_phase='cancelled',
+        )
+        if cancel_phase == 'after_error':
+            raise RuntimeError('Provider terminated after cancellation')
+        return 0, CLOSED_NMAP_XML, '', {'provider': 'aegis-kali-network'}
+
+    monkeypatch.setattr(nmap_finding_validation, '_run_nmap_exact', provider)
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    validation.refresh_from_db()
+    finding.refresh_from_db()
+    assert result['status'] == ValidationRun.Status.CANCELLED
+    assert validation.status == ValidationRun.Status.CANCELLED
+    assert validation.current_phase == 'cancelled'
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 0
+    assert finding.validation_status != 'verified'
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('cancel_phase', ['before_start', 'after_success', 'after_error'])
+def test_nuclei_cancelled_run_never_executes_or_commits_late_evidence(
+    finding_fixture, monkeypatch, cancel_phase,
+):
+    from fastapi_app.tasks import finding_validation
+
+    user, finding = finding_fixture
+    finding.source_engine = 'nuclei'
+    finding.raw_data = {
+        'template-path': '/opt/nuclei-templates/http/cves/exact.yaml',
+        'template-id': 'approved-template',
+        'matcher-name': 'approved-matcher',
+    }
+    finding.asset.configuration = {'url': 'https://approved.example', 'authorized': True}
+    finding.asset.save(update_fields=['configuration'])
+    finding.save(update_fields=['source_engine', 'raw_data'])
+    validation = _validation(user, finding)
+    validation.engines = ['nuclei']
+    validation.target_type = 'url'
+    validation.target_value = 'https://approved.example'
+    validation.save(update_fields=['engines', 'target_type', 'target_value'])
+    monkeypatch.setattr(
+        finding_validation, 'require_bound_validation_authorization',
+        lambda current: (finding.asset, '', current.authorization_decision),
+    )
+    if cancel_phase == 'before_start':
+        ValidationRun.objects.filter(pk=validation.pk).update(
+            status=ValidationRun.Status.CANCELLED, current_phase='cancelled',
+        )
+
+    def provider(**kwargs):
+        if cancel_phase == 'before_start':
+            pytest.fail('Cancelled validation must never call a scanner')
+        ValidationRun.objects.filter(pk=validation.pk).update(
+            status=ValidationRun.Status.CANCELLED, current_phase='cancelled',
+        )
+        if cancel_phase == 'after_error':
+            raise RuntimeError('Provider terminated after cancellation')
+        return {'exit_code': 0, 'stderr': '', 'stdout': ''}
+
+    monkeypatch.setattr(finding_validation, 'execute_kali_nuclei', provider)
+    result = finding_validation.validate_finding_e2e.run(str(validation.id))
+    validation.refresh_from_db()
+    finding.refresh_from_db()
+    assert result['status'] == ValidationRun.Status.CANCELLED
+    assert validation.status == ValidationRun.Status.CANCELLED
+    assert validation.current_phase == 'cancelled'
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 0
+    assert finding.validation_status not in {'verified', 'validated'}
+
+
+@pytest.mark.django_db
+def test_cancel_api_preserves_completed_run_and_idempotently_cancels_queued(finding_fixture):
+    from fastapi_app.routers.validations import _cancel
+
+    user, finding = finding_fixture
+    completed = _validation(user, finding)
+    completed.status = ValidationRun.Status.COMPLETED
+    completed.save(update_fields=['status'])
+    assert _cancel.func(completed.pk, str(user.pk)).status == ValidationRun.Status.COMPLETED
+    completed.refresh_from_db()
+    assert completed.status == ValidationRun.Status.COMPLETED
+
+    queued = _validation(user, finding)
+    assert _cancel.func(queued.pk, str(user.pk)).status == ValidationRun.Status.CANCELLED
+    assert _cancel.func(queued.pk, str(user.pk)).status == ValidationRun.Status.CANCELLED
+    queued.refresh_from_db()
+    assert queued.status == ValidationRun.Status.CANCELLED
+    assert queued.current_phase == 'cancelled'
+
+
+@pytest.mark.django_db
+def test_nmap_cancel_between_preflight_and_phase_update_stays_cancelled(
+    finding_fixture, monkeypatch,
+):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    decision = validation.authorization_decision
+
+    def authorize_then_cancel(current):
+        ValidationRun.objects.filter(pk=current.pk).update(
+            status=ValidationRun.Status.CANCELLED,
+            current_phase='cancelled',
+            progress=100,
+        )
+        return finding.asset, current.target_value, decision
+
+    monkeypatch.setattr(
+        nmap_finding_validation,
+        'require_bound_validation_authorization',
+        authorize_then_cancel,
+    )
+    monkeypatch.setattr(
+        nmap_finding_validation, '_run_nmap_exact',
+        lambda *a, **kw: pytest.fail('Cancelled preflight cannot trigger Nmap'),
+    )
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.pk))
+    validation.refresh_from_db()
+    assert result['status'] == ValidationRun.Status.CANCELLED
+    assert validation.status == ValidationRun.Status.CANCELLED
+    assert validation.current_phase == 'cancelled'
+    assert validation.progress == 100
+    assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+@pytest.mark.django_db
+def test_running_nmap_delivery_does_not_dispatch_duplicate_scan(
+    finding_fixture, monkeypatch,
+):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    ValidationRun.objects.filter(pk=validation.pk).update(status=ValidationRun.Status.RUNNING)
+    monkeypatch.setattr(
+        nmap_finding_validation, '_run_nmap_exact',
+        lambda *a, **kw: pytest.fail('Running validation cannot be claimed again'),
+    )
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.pk))
+    assert result['status'] == ValidationRun.Status.RUNNING
+    assert result['redelivered'] is True
+    assert Evidence.objects.filter(finding=finding).count() == 0
+
+
+@pytest.mark.django_db
+def test_running_nuclei_delivery_does_not_dispatch_duplicate_scan(
+    finding_fixture, monkeypatch,
+):
+    from fastapi_app.tasks import finding_validation
+    user, finding = finding_fixture
+    finding.source_engine = 'nuclei'
+    finding.save(update_fields=['source_engine'])
+    validation = _validation(user, finding)
+    ValidationRun.objects.filter(pk=validation.pk).update(status=ValidationRun.Status.RUNNING)
+    monkeypatch.setattr(
+        finding_validation, 'execute_kali_nuclei',
+        lambda **kw: pytest.fail('Running validation cannot be claimed again'),
+    )
+    result = finding_validation.validate_finding_e2e.run(str(validation.pk))
+    assert result['status'] == ValidationRun.Status.RUNNING
+    assert result['redelivered'] is True
+    assert Evidence.objects.filter(finding=finding).count() == 0
