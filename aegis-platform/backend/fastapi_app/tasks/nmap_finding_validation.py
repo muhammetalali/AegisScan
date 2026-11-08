@@ -118,8 +118,8 @@ def _matches_signature(parsed: dict[str, Any], expected_port: int, signature: di
 
 def _fail_validation(validation: ValidationRun, message: str, status: str = 'failed') -> dict[str, Any]:
     # Cancellation is terminal: even a preflight rejection must not erase it.
-    updated = ValidationRun.objects.filter(pk=validation.pk).exclude(
-        status=ValidationRun.Status.CANCELLED,
+    updated = ValidationRun.objects.filter(
+        pk=validation.pk, status=ValidationRun.Status.RUNNING,
     ).update(
         status=ValidationRun.Status.FAILED,
         progress=100,
@@ -154,8 +154,8 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
     # Compare-and-update is essential: a queued Celery delivery cannot revive
     # a run cancelled (or completed) between the initial read and this claim.
-    claimed = ValidationRun.objects.filter(pk=validation_id).exclude(
-        status__in=[ValidationRun.Status.CANCELLED, ValidationRun.Status.COMPLETED],
+    claimed = ValidationRun.objects.filter(
+        pk=validation_id, status=ValidationRun.Status.QUEUED,
     ).update(
         status=ValidationRun.Status.RUNNING,
         progress=10,
@@ -183,9 +183,13 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
 
         port, signature = _expected_signature(finding.raw_data or {})
-        validation.current_phase = 'nmap'
-        validation.progress = 20
-        validation.save(update_fields=['current_phase', 'progress'])
+        # Do not revert a concurrent cancellation's terminal progress/phase.
+        phase_updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
+        ).update(current_phase='nmap', progress=20)
+        if not phase_updated:
+            return {'status': ValidationRun.objects.get(pk=validation_id).status,
+                    'validation_id': validation_id}
 
         exit_code, evidence_raw, stderr, provider_runtime = _run_nmap_exact(
             target, port, timeout=300,
@@ -296,8 +300,8 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         # The provider may observe cancellation and raise. Keep CANCELLED as
         # the terminal result; neither the exception nor a queued retry may
         # rewrite the user's explicit decision.
-        updated = ValidationRun.objects.filter(pk=validation_id).exclude(
-            status=ValidationRun.Status.CANCELLED,
+        updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
         ).update(
             status=ValidationRun.Status.FAILED,
             progress=100,
@@ -306,5 +310,6 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             completed_at=datetime.now(timezone.utc),
         )
         if not updated:
-            return {'status': ValidationRun.Status.CANCELLED, 'validation_id': validation_id}
+            return {'status': ValidationRun.objects.get(pk=validation_id).status,
+                    'validation_id': validation_id}
         raise
