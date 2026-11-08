@@ -354,3 +354,97 @@ def test_unqualified_authorization_run_does_not_claim_verified_finding():
     assert projection['items'][0]['run_status'] == 'failed'
     assert projection['items'][0]['observation_fingerprint'] is None
     assert 'confirmed' not in {item['observed_decision'] for item in projection['items']}
+
+
+@pytest.mark.django_db
+def test_owned_multi_tenant_fixture_semantic_execution_reaches_full_project_report():
+    """Actual local fixture responses -> Aegis domain observation -> report.
+
+    This does not invoke Burp MCP, a hosted Academy lab or a production scanner.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    from fastapi_app.services.web_security_foundation import (
+        persist_policy, run_authorization_matrix,
+    )
+
+    owner, _, project, _ = _fixture_project()
+    fixture_source = (
+        Path(__file__).resolve().parents[3]
+        / 'e2e/fixtures/multi-tenant-target/app.py'
+    )
+    spec = importlib.util.spec_from_file_location('g3_owned_multi_tenant_report', fixture_source)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    persist_policy(project, str(owner.pk), {
+        'identity_type': 'user',
+        'role': 'viewer',
+        'tenant_ref': '*',
+        'endpoint': '*/records/*',
+        'method': 'GET',
+        'operation': 'read',
+        'resource_type': 'record',
+        'allowed': True,
+        'ownership_rule': '',
+        'tenant_rule': 'same_tenant',
+        'sensitive_operation': False,
+        'required_scopes': [],
+        'conditions': {},
+        'policy_source': 'operator_declared',
+        'provenance': {'fixture': 'multi-tenant-target', 'scope': 'isolated-local'},
+        'confidence': 1.0,
+        'version': 1,
+    })
+    cases = []
+    identity = {
+        'ref': 'tenant-a-service', 'type': 'user', 'role': 'viewer',
+        'tenant_ref': 'tenant-a', 'scopes': [],
+    }
+    resource = {
+        'ref': 'record-bravo', 'type': 'record', 'tenant_ref': 'tenant-b',
+        'owner_ref': '',
+    }
+    with TestClient(module.app) as fixture:
+        for variant, expected_status in [('fixed', 404), ('vulnerable', 200)]:
+            path = f'/{variant}/tenants/tenant-b/records/bravo'
+            reply = fixture.get(path, headers={'Authorization': 'Bearer tenant-a-token'})
+            assert reply.status_code == expected_status
+            cases.append({
+                'ref': f'g3-{variant}-cross-tenant',
+                'identity': dict(identity),
+                'resource': dict(resource),
+                'endpoint': path,
+                'method': 'GET', 'operation': 'read', 'protocol': 'http',
+                'response': {
+                    'status_code': reply.status_code,
+                    'headers': {},
+                    'body': reply.json(),
+                },
+            })
+
+    matrix, observations = run_authorization_matrix(project, str(owner.pk), cases)
+    assert matrix.summary['total'] == 2
+    assert matrix.summary['passed'] == 1
+    assert matrix.summary['failed'] == 1
+    assert matrix.summary['cross_tenant_cases'] == 2
+    by_case = {item.case_ref: item for item in observations}
+    assert by_case['g3-fixed-cross-tenant'].passed is True
+    assert by_case['g3-fixed-cross-tenant'].observed_decision == 'denied'
+    assert by_case['g3-vulnerable-cross-tenant'].passed is False
+    assert by_case['g3-vulnerable-cross-tenant'].observed_decision == 'allowed'
+
+    payload = async_to_sync(_build_payload)(str(project.pk), None, 'full')
+    recorded = payload['authorization_observations']
+    assert recorded['total'] == recorded['included'] == 2
+    assert recorded['policy_mismatch_total'] == 1
+    assert recorded['independent_verification'] is False
+    assert recorded['finding_confirmation'] == 'not_established_by_observation'
+    assert {item['run_id'] for item in recorded['items']} == {str(matrix.pk)}
+    assert {item['observation_id'] for item in recorded['items']} == {
+        str(observation.pk) for observation in observations
+    }
+    assert len(payload['findings']) == 1  # WSTG fixture only, not a new BAC finding
+    assert 'tenant-a-token' not in str(payload)
+    assert 'tenant-a-token' not in _make_csv(payload).decode('utf-8')
