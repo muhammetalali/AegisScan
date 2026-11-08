@@ -108,10 +108,14 @@ def normalize_target(raw: str) -> str:
         raise ValueError("A credential-free, HTTPS-only external URL is required")
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("Invalid HTTPS port")
-    if url.path not in {"", "/"}:
-        raise ValueError("Register the application origin as an exact root-scope asset")
+    path = url.path or "/"
+    # Preserve the approved base path without silently resolving encoded or
+    # ambiguous segments. The Django query must match an exact authorized asset.
+    if (not re.fullmatch(r"/[A-Za-z0-9._~/-]*", path)
+            or "//" in path or any(segment in {".", ".."} for segment in path.split("/"))):
+        raise ValueError("Target path must be an unambiguous, exact authorized scope")
     authority = host.lower() + (f":{port}" if port and port != 443 else "")
-    return urlunsplit(("https", authority, "/", "", ""))
+    return urlunsplit(("https", authority, path, "", ""))
 
 
 def run_json(command: list[str], *, timeout: int) -> dict:
