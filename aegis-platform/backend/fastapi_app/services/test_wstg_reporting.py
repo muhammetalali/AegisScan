@@ -344,7 +344,7 @@ def test_unqualified_authorization_run_does_not_claim_verified_finding():
     WebSecurityObservation.objects.create(
         run=invalid_run, case_ref='indeterminate-case', identity_ref='test',
         identity_type='user', resource_ref='record', endpoint='/record',
-        method='GET', expected_allowed=False, observed_decision='=IMPORTDATA("http://x.invalid")',
+        method='GET', expected_allowed=False, observed_decision='=1+1',
         passed=False, evidence_fingerprint='malformed',
     )
     payload = async_to_sync(_build_payload)(str(project.pk), None, 'full')
@@ -355,7 +355,7 @@ def test_unqualified_authorization_run_does_not_claim_verified_finding():
     assert projection['items'][0]['run_kind'] == 'invalid'
     assert projection['items'][0]['observed_decision'] == 'invalid'
     assert '=HYPERLINK' not in _make_csv(payload).decode('utf-8')
-    assert '=IMPORTDATA' not in _make_csv(payload).decode('utf-8')
+    assert '=1+1' not in _make_csv(payload).decode('utf-8')
     assert projection['items'][0]['observation_fingerprint'] is None
     assert 'confirmed' not in {item['observed_decision'] for item in projection['items']}
 
