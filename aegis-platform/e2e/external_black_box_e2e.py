@@ -27,6 +27,52 @@ def require(response:requests.Response,expected:set[int],label:str)->dict[str,An
  except ValueError as exc:raise RuntimeError(f'{label} returned non-JSON response: {response.text[:1000]}') from exc
 def http(session:requests.Session,method:str,url:str,label:str,expected:set[int],**kwargs)->dict[str,Any]|list[Any]:
  response=session.request(method,url,**kwargs); print(f'E2E_HTTP stage="{label}" method={method} status={response.status_code} url={url}',flush=True); return require(response,expected,label)
+def bind_project_tenant_with_reconciliation(
+ session:requests.Session,project_id:str,organization_id:str,
+)->dict[str,Any]:
+ """One POST only. A lost response after commit is an E2E failure, not success.
+
+ The read-only GET can distinguish an indeterminate network failure from a
+ committed tenant binding; it must not trigger a second mutation.
+ """
+ endpoint=f'{API_V1}/enterprise/projects/{project_id}/tenant'
+ params={'organization_id':organization_id}
+
+ def persisted_as_requested()->bool:
+  try:
+   read=session.get(endpoint,timeout=20)
+   print(f'E2E_TENANT_RECONCILIATION status={read.status_code}',flush=True)
+   if read.status_code!=200:return False
+   data=read.json()
+   return isinstance(data,dict) and data.get('project_id')==project_id and data.get('organization_id')==organization_id and data.get('bound') is True
+  except (requests.RequestException,ValueError,TypeError):
+   return False
+
+ try:
+  response=session.post(endpoint,params=params,timeout=20)
+ except requests.RequestException as exc:
+  committed=persisted_as_requested()
+  raise RuntimeError(
+   'Project tenant binding transport failed; committed state observed via GET='
+   f'{committed}. Production availability acceptance FAIL; never retry POST blindly.'
+  ) from exc
+
+ print(f'E2E_HTTP stage="Project tenant binding" method=POST status={response.status_code} url={endpoint}',flush=True)
+ if response.status_code!=200:
+  committed=persisted_as_requested()
+  raise RuntimeError(
+   f'Project tenant binding HTTP {response.status_code}; '
+   f'committed state observed via GET={committed}. '
+   'Production availability acceptance FAIL; never retry POST blindly.'
+  )
+ payload=require(response,{200},'Project tenant binding')
+ if not isinstance(payload,dict) or payload.get('organization_id')!=organization_id:
+  raise RuntimeError('Project tenant binding POST returned mismatched organization')
+ if not persisted_as_requested():
+  raise RuntimeError('Project tenant binding POST succeeded but durable GET did not match')
+ return payload
+
+
 def csrf(session:requests.Session)->str:
  data=http(session,'GET',f'{DJANGO_URL}/auth/csrf/','CSRF bootstrap',{200},timeout=15,verify=VERIFY_TLS); token=data.get('csrfToken') if isinstance(data,dict) else None; token=token or session.cookies.get('csrftoken')
  if not token:raise RuntimeError('CSRF token was not issued')
@@ -244,8 +290,8 @@ def main()->int:
   membership=http(session,'POST',f'{API_V1}/enterprise/organizations/{organization_id}/members','Governance approver organization membership',{201},json={'email':approver_email,'role':'admin'},timeout=20)
   approver_membership_id=membership.get('id') if isinstance(membership,dict) else None
   if not approver_membership_id:raise RuntimeError(f'Governance approver membership did not return id: {membership!r}')
- binding=http(session,'POST',f'{API_V1}/enterprise/projects/{project_id}/tenant','Project tenant binding',{200},params={'organization_id':organization_id},timeout=20)
- if binding.get('organization_id')!=organization_id:raise RuntimeError(f'Project tenant binding did not persist: {binding!r}')
+ binding=bind_project_tenant_with_reconciliation(session,project_id,organization_id)
+ if binding.get('organization_id')!=organization_id:raise RuntimeError('Project tenant binding did not persist')
  grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':approver_membership_id,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{project_id if E2E_PROJECT_ID else unique}'},timeout=20)
  if grant.get('membership_id')!=approver_membership_id or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
  launcher_scope_mode=None; launcher_asset_id=None; launcher_request=None; launcher_authorization_decision_id=None

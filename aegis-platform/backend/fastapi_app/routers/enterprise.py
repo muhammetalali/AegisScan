@@ -5,6 +5,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -173,16 +174,80 @@ async def add_organization_member(
 
     return await sync_to_async(add_member)()
 
+@router.get('/projects/{project_id}/tenant')
+async def read_project_tenant(
+    project_id: UUID,
+    user=Depends(__import__('fastapi_app.core.dependencies', fromlist=['get_current_user']).get_current_user),
+):
+    """Reconcile an indeterminate POST without replaying a tenant mutation."""
+    actor_id = str(user.get('user_id') or '')
+    project = await _project_for_user(str(project_id), actor_id)
+
+    def read_binding():
+        link = TenantProject.objects.filter(project=project, organization__is_active=True).first()
+        if link is None or not OrganizationMembership.objects.filter(
+            organization_id=link.organization_id,
+            user_id=actor_id,
+            user__is_active=True,
+            is_active=True,
+        ).exists():
+            # Avoid revealing the tenant identity to unrelated project viewers.
+            raise HTTPException(status_code=404, detail='Project tenant binding not found')
+        return {
+            'project_id': str(project.id),
+            'organization_id': str(link.organization_id),
+            'bound': True,
+        }
+
+    return await sync_to_async(read_binding)()
+
+
 @router.post('/projects/{project_id}/tenant')
-async def bind_project_tenant(project_id: UUID, organization_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    project=await _project_for_user(str(project_id),str(user.get('user_id')))
+async def bind_project_tenant(
+    project_id: UUID,
+    organization_id: UUID,
+    user=Depends(__import__('fastapi_app.core.dependencies', fromlist=['get_current_user']).get_current_user),
+):
+    actor_id = str(user.get('user_id') or '')
+    project = await _project_for_user(str(project_id), actor_id)
+
+    @transaction.atomic
     def bind():
-        org=Organization.objects.filter(pk=organization_id).first()
-        if not org: raise HTTPException(status_code=404, detail='Organization not found')
-        if not OrganizationMembership.objects.filter(organization=org,user_id=str(user.get('user_id')),role__in=[OrganizationMembership.Role.OWNER,OrganizationMembership.Role.ADMIN],is_active=True).exists(): raise HTTPException(status_code=403, detail='Organization administration permission required')
-        link,created=TenantProject.objects.update_or_create(project=project,defaults={'organization':org})
-        OrganizationMembership.objects.get_or_create(organization=org,user=project.owner,defaults={'role':OrganizationMembership.Role.OWNER})
-        return {'project_id':str(project.id),'organization_id':str(link.organization_id),'created':created}
+        # A project-row lock serializes competing tenant decisions. Never use
+        # update_or_create here: a lost HTTP response must not authorize a
+        # later request to silently move the project into another tenant.
+        locked_project = Project.objects.select_for_update().get(pk=project.pk)
+        org = Organization.objects.filter(pk=organization_id, is_active=True).first()
+        if org is None:
+            raise HTTPException(status_code=404, detail='Organization not found')
+        if not OrganizationMembership.objects.filter(
+            organization=org,
+            user_id=actor_id,
+            user__is_active=True,
+            role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN],
+            is_active=True,
+        ).exists():
+            raise HTTPException(status_code=403, detail='Organization administration permission required')
+
+        link, created = TenantProject.objects.get_or_create(
+            project=locked_project, defaults={'organization': org},
+        )
+        if link.organization_id != org.id:
+            raise HTTPException(
+                status_code=409,
+                detail='Project is already bound to another organization; no automatic tenant reassignment',
+            )
+        OrganizationMembership.objects.get_or_create(
+            organization=org,
+            user=locked_project.owner,
+            defaults={'role': OrganizationMembership.Role.OWNER},
+        )
+        return {
+            'project_id': str(locked_project.id),
+            'organization_id': str(link.organization_id),
+            'created': created,
+        }
+
     return await sync_to_async(bind)()
 
 @router.post('/twins')
