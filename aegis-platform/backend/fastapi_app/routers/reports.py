@@ -382,11 +382,11 @@ def _authorization_observation_projection(project: Project) -> dict:
             {
                 'observation_id': str(row.pk),
                 'run_id': str(row.run_id),
-                'run_kind': row.run.kind,
-                'run_status': row.run.status,
+                'run_kind': (row.run.kind if row.run.kind in WebSecurityValidationRun.Kind.values else 'invalid'),
+                'run_status': (row.run.status if row.run.status in WebSecurityValidationRun.Status.values else 'invalid'),
                 'policy_matched': row.passed,
                 'expected_allowed': row.expected_allowed,
-                'observed_decision': row.observed_decision,
+                'observed_decision': (row.observed_decision if row.observed_decision in WebSecurityObservation.Decision.values else 'invalid'),
                 'observation_fingerprint': (
                     row.evidence_fingerprint
                     if len(row.evidence_fingerprint or '') == 64
