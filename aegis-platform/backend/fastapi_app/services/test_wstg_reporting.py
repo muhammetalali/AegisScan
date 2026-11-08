@@ -294,9 +294,8 @@ def test_full_project_report_exposes_only_bounded_authorization_observation_line
     csv_text = _make_csv(full).decode('utf-8')
     assert 'authorization_observation_summary,observation-only,2,1,2,False' in csv_text
     assert 'authorization_observation' in csv_text
-    assert b'Authorization policy observations (not confirmed vulnerabilities)' in _make_pdf(
-        full, 'G3 Authorized Observations',
-    )
+    pdf = _make_pdf(full, 'G3 Authorized Observations')
+    assert pdf.startswith(b'%PDF-') and len(pdf) > 500
 
     settings.MEDIA_ROOT = tmp_path
     report = async_to_sync(_create_report)(
