@@ -311,3 +311,76 @@ def test_tenant_binding_failure_rolls_back_link_without_half_committed_membershi
         _clear_auth()
         close_old_connections()
     assert TenantProject.objects.filter(project=project).count() == before_count
+
+
+@pytest.mark.parametrize(
+    ('post_status', 'get_status', 'match_expected', 'transport_lost', 'should_pass'),
+    [
+        (200, 200, True, False, True),
+        (502, 200, True, False, False),  # committed write + lost response
+        (502, 404, False, False, False), # failure and no committed binding
+        (None, 200, True, True, False),  # connection died after the write
+    ],
+)
+def test_external_e2e_tenant_binding_reconciles_without_replay(
+    post_status, get_status, match_expected, transport_lost, should_pass,
+):
+    """The production E2E harness may read after failure, never POST twice."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    import requests
+
+    script = Path(__file__).resolve().parents[3] / 'e2e/external_black_box_e2e.py'
+    spec = importlib.util.spec_from_file_location('aegis_test_tenant_e2e', script)
+    assert spec and spec.loader
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+
+    project_id = '00000000-0000-0000-0000-000000000001'
+    organization_id = '00000000-0000-0000-0000-000000000002'
+
+    def http_response(status, payload):
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps(payload).encode()
+        return response
+
+    class FakeSession:
+        post_calls = 0
+        get_calls = 0
+
+        def post(self, url, **kwargs):
+            self.post_calls += 1
+            assert url.endswith('/enterprise/projects/' + project_id + '/tenant')
+            assert kwargs['params'] == {'organization_id': organization_id}
+            if transport_lost:
+                raise requests.ConnectionError('simulated response dropped after commit')
+            return http_response(post_status, {
+                'project_id': project_id, 'organization_id': organization_id,
+                'created': True,
+            })
+
+        def get(self, url, **kwargs):
+            self.get_calls += 1
+            assert url.endswith('/enterprise/projects/' + project_id + '/tenant')
+            return http_response(get_status, {
+                'project_id': project_id,
+                'organization_id': organization_id if match_expected else 'wrong-organization',
+                'bound': match_expected,
+            })
+
+    session = FakeSession()
+    if should_pass:
+        result = harness.bind_project_tenant_with_reconciliation(
+            session, project_id, organization_id,
+        )
+        assert result['organization_id'] == organization_id
+    else:
+        with pytest.raises(RuntimeError, match='availability acceptance FAIL'):
+            harness.bind_project_tenant_with_reconciliation(
+                session, project_id, organization_id,
+            )
+    assert session.post_calls == 1
+    assert session.get_calls == 1
