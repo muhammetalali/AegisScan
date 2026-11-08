@@ -92,8 +92,8 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         }
 
     # Cancellation and completion are terminal, including on Celery redelivery.
-    claimed = ValidationRun.objects.filter(pk=validation_id).exclude(
-        status__in=[ValidationRun.Status.CANCELLED, ValidationRun.Status.COMPLETED],
+    claimed = ValidationRun.objects.filter(
+        pk=validation_id, status=ValidationRun.Status.QUEUED,
     ).update(
         status=ValidationRun.Status.RUNNING,
         progress=10,
@@ -108,14 +108,14 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
     asset, authorization_reason, authorization = require_bound_validation_authorization(validation)
     if authorization is None:
-        updated = ValidationRun.objects.filter(pk=validation_id).exclude(
-            status=ValidationRun.Status.CANCELLED,
+        updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
         ).update(
             status=ValidationRun.Status.FAILED,
             error_message=authorization_reason,
             completed_at=datetime.now(timezone.utc),
         )
-        return {'status': 'blocked' if updated else ValidationRun.Status.CANCELLED,
+        return {'status': 'blocked' if updated else ValidationRun.objects.get(pk=validation_id).status,
                 'validation_id': validation_id}
     asset_config = asset.configuration or {}
 
@@ -241,8 +241,8 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'evidence_id': result['evidence_id'],
         }
     except Exception as exc:
-        updated = ValidationRun.objects.filter(pk=validation_id).exclude(
-            status=ValidationRun.Status.CANCELLED,
+        updated = ValidationRun.objects.filter(
+            pk=validation_id, status=ValidationRun.Status.RUNNING,
         ).update(
             status=ValidationRun.Status.FAILED,
             progress=100,
@@ -251,5 +251,6 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             completed_at=datetime.now(timezone.utc),
         )
         if not updated:
-            return {'status': ValidationRun.Status.CANCELLED, 'validation_id': validation_id}
+            return {'status': ValidationRun.objects.get(pk=validation_id).status,
+                    'validation_id': validation_id}
         raise
