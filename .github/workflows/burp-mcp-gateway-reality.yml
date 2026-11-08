@@ -21,6 +21,8 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/audit_external_web_lab_readiness.py'
       - 'aegis-platform/scripts/test_audit_external_web_lab_readiness.py'
+      - 'aegis-platform/backend/fastapi_app/services/auth_otp_lab_contract.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_auth_otp_lab_contract.py'
       - 'docs/web-labs/cyberpedia-northwind-auth-otp.v1.json'
       - 'docs/EXTERNAL_WEB_LABS_PRODUCTION_RUNBOOK_AR.md'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
@@ -93,6 +95,8 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/audit_external_web_lab_readiness.py'
       - 'aegis-platform/scripts/test_audit_external_web_lab_readiness.py'
+      - 'aegis-platform/backend/fastapi_app/services/auth_otp_lab_contract.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_auth_otp_lab_contract.py'
       - 'docs/web-labs/cyberpedia-northwind-auth-otp.v1.json'
       - 'docs/EXTERNAL_WEB_LABS_PRODUCTION_RUNBOOK_AR.md'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
@@ -197,6 +201,9 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Fail-closed authentication and OTP observation contract (offline)
+        run: python -m unittest -q aegis-platform/backend/fastapi_app/services/test_auth_otp_lab_contract.py
 
       - name: External Web Lab preflight and non-executable manifest safety (offline)
         run: python -m unittest -q aegis-platform/scripts/test_audit_external_web_lab_readiness.py
