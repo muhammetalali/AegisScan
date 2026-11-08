@@ -183,3 +183,131 @@ def test_relationship_creation_is_concurrency_safe():
         close_old_connections()
     assert all(status in {200, 201} for status in statuses)
     assert AssetRelationship.objects.filter(project=project, source=source, target=target, relationship_type='connects_to').count() == 1
+
+
+def _tenant_binding_fixture(suffix='a'):
+    from enterprise.models import Organization, OrganizationMembership
+
+    actor = User.objects.create_user(
+        email=f'tenant-reconcile-{suffix}@example.invalid',
+        password='Strong-Test-Password-123!',
+        role=UserRole.SECURITY_ANALYST,
+    )
+    project = Project.objects.create(
+        name=f'Tenant reconcile {suffix}', slug=f'tenant-reconcile-{suffix}', owner=actor,
+    )
+    organizations = []
+    for label in ('primary', 'secondary'):
+        organization = Organization.objects.create(
+            name=f'Tenant {suffix} {label}',
+            slug=f'tenant-{suffix}-{label}',
+            owner=actor,
+        )
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=actor,
+            role=OrganizationMembership.Role.OWNER,
+            is_active=True,
+        )
+        organizations.append(organization)
+    return actor, project, *organizations
+
+
+def test_tenant_binding_read_reconciliation_and_conflicting_replay_fail_closed():
+    """Lost HTTP response must not allow an existing project to move tenants."""
+    from enterprise.models import TenantProject
+
+    actor, project, primary, secondary = _tenant_binding_fixture('replay')
+    endpoint = f'/api/v1/enterprise/projects/{project.id}/tenant'
+    _auth(actor)
+    try:
+        with TestClient(app) as client:
+            not_bound = client.get(endpoint)
+            assert not_bound.status_code == 404
+
+            # Simulate committing the POST but losing its HTTP response at
+            # the client boundary: reconciliation MUST be a read, not a retry.
+            first_response = client.post(endpoint, params={'organization_id': str(primary.id)})
+            assert first_response.status_code == 200, first_response.text
+            del first_response
+            reconciled = client.get(endpoint)
+            assert reconciled.status_code == 200, reconciled.text
+            assert reconciled.json() == {
+                'project_id': str(project.id),
+                'organization_id': str(primary.id),
+                'bound': True,
+            }
+            repeat = client.post(endpoint, params={'organization_id': str(primary.id)})
+            assert repeat.status_code == 200, repeat.text
+            assert repeat.json()['created'] is False
+
+            conflicting = client.post(endpoint, params={'organization_id': str(secondary.id)})
+            assert conflicting.status_code == 409
+            assert 'no automatic tenant reassignment' in conflicting.json()['detail']
+    finally:
+        _clear_auth()
+        close_old_connections()
+
+    links = TenantProject.objects.filter(project=project)
+    assert links.count() == 1
+    assert links.get().organization_id == primary.pk
+
+
+def test_tenant_binding_requires_active_admin_and_reconciliation_hides_other_tenant():
+    from enterprise.models import OrganizationMembership, TenantProject
+
+    actor, project, primary, secondary = _tenant_binding_fixture('visibility')
+    endpoint = f'/api/v1/enterprise/projects/{project.id}/tenant'
+    _auth(actor)
+    try:
+        with TestClient(app) as client:
+            success = client.post(endpoint, params={'organization_id': str(primary.id)})
+            assert success.status_code == 200, success.text
+            assert TenantProject.objects.get(project=project).organization_id == primary.pk
+
+            OrganizationMembership.objects.filter(organization=primary, user=actor).update(
+                is_active=False,
+            )
+            hidden = client.get(endpoint)
+            assert hidden.status_code == 404
+            denied = client.post(endpoint, params={'organization_id': str(primary.id)})
+            assert denied.status_code == 403
+            assert TenantProject.objects.get(project=project).organization_id == primary.pk
+
+            OrganizationMembership.objects.filter(organization=primary, user=actor).update(
+                is_active=True,
+            )
+            secondary.is_active = False
+            secondary.save(update_fields=['is_active'])
+            inactive_target = client.post(endpoint, params={'organization_id': str(secondary.id)})
+            assert inactive_target.status_code == 404
+            assert client.get(endpoint).json()['organization_id'] == str(primary.id)
+    finally:
+        _clear_auth()
+        close_old_connections()
+
+
+def test_tenant_binding_failure_rolls_back_link_without_half_committed_membership(monkeypatch):
+    """The link and owner-membership persistence share one transaction."""
+    from enterprise.models import OrganizationMembership, TenantProject
+
+    actor, project, primary, _ = _tenant_binding_fixture('rollback')
+    endpoint = f'/api/v1/enterprise/projects/{project.id}/tenant'
+    before_count = TenantProject.objects.filter(project=project).count()
+    original_get_or_create = OrganizationMembership.objects.get_or_create
+
+    def fail_after_link(*args, **kwargs):
+        if kwargs.get('organization') == primary and kwargs.get('user') == actor:
+            raise RuntimeError('injected rollback after tenant link insert')
+        return original_get_or_create(*args, **kwargs)
+
+    monkeypatch.setattr(OrganizationMembership.objects, 'get_or_create', fail_after_link)
+    _auth(actor)
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            failed = client.post(endpoint, params={'organization_id': str(primary.id)})
+            assert failed.status_code == 500
+    finally:
+        _clear_auth()
+        close_old_connections()
+    assert TenantProject.objects.filter(project=project).count() == before_count
