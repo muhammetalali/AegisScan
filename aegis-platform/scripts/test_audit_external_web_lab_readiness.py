@@ -33,10 +33,18 @@ class TestInput(unittest.TestCase):
         self.assertEqual(audit.normalize_target(TARGET), TARGET + "/")
         self.assertEqual(audit.normalize_target(TARGET + ":443/"), TARGET + "/")
 
+    def test_scoped_subpath_is_preserved_without_scope_expansion(self):
+        self.assertEqual(
+            audit.normalize_target(TARGET + "/partner/portal/"),
+            TARGET + "/partner/portal/",
+        )
+
     def test_rejects_non_application_inputs(self):
         cases = [
             "http://challenge.cyberpedia.site",
-            TARGET + "/admin", TARGET + "/?token=secret",
+            TARGET + "/a/../admin", TARGET + "/a/./admin",
+            TARGET + "/a//b", TARGET + "/a%2fb", TARGET + "/a\\b",
+            TARGET + "/?token=secret",
             TARGET + "/#top", "https://user:pass@challenge.cyberpedia.site",
             "https://challenge..cyberpedia.site/", "https://",
             TARGET + "\n", "javascript:alert(1)",
