@@ -28,6 +28,7 @@ from django_project.scans.models import Scan
 from django_project.users.models import Permission
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution
+from enterprise.web_security_models import WebSecurityObservation, WebSecurityValidationRun
 from enterprise.services import ensure_project_tenant, schedule_task
 from ..services.wstg_reporting import build_wstg_project_coverage
 
@@ -350,6 +351,54 @@ def _high_value_evidence_claim(row) -> dict:
     return result
 
 
+_MAX_AUTHORIZATION_OBSERVATIONS_IN_REPORT = 200
+
+
+def _authorization_observation_projection(project: Project) -> dict:
+    """Project-only bounded observation lineage, NEVER a confirmed finding.
+
+    Do not export HTTP response bodies, raw semantic input, request headers,
+    identity/tenant/resource identifiers, URL paths, or authorization tokens.
+    An observation fingerprint does not establish independent verification.
+    """
+    scoped = WebSecurityObservation.objects.filter(run__project=project)
+    total = scoped.count()
+    mismatches = scoped.filter(
+        run__status=WebSecurityValidationRun.Status.COMPLETED, passed=False,
+    ).count()
+    rows = list(scoped.select_related('run').order_by('-created_at', '-id')[
+        :_MAX_AUTHORIZATION_OBSERVATIONS_IN_REPORT
+    ])
+    return {
+        'schema': 'aegis.authorization-observation-report.v1',
+        'claim_policy': 'observation-only',
+        'finding_confirmation': 'not_established_by_observation',
+        'independent_verification': False,
+        'total': total,
+        'policy_mismatch_total': mismatches,
+        'included': len(rows),
+        'truncated': total > len(rows),
+        'items': [
+            {
+                'observation_id': str(row.pk),
+                'run_id': str(row.run_id),
+                'run_kind': (row.run.kind if row.run.kind in WebSecurityValidationRun.Kind.values else 'invalid'),
+                'run_status': (row.run.status if row.run.status in WebSecurityValidationRun.Status.values else 'invalid'),
+                'policy_matched': row.passed,
+                'expected_allowed': row.expected_allowed,
+                'observed_decision': (row.observed_decision if row.observed_decision in WebSecurityObservation.Decision.values else 'invalid'),
+                'observation_fingerprint': (
+                    row.evidence_fingerprint
+                    if len(row.evidence_fingerprint or '') == 64
+                    and all(char in '0123456789abcdef' for char in row.evidence_fingerprint)
+                    else None
+                ),
+            }
+            for row in rows
+        ],
+    }
+
+
 @sync_to_async
 def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
     project = Project.objects.filter(id=project_id).first()
@@ -380,6 +429,11 @@ def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
         ],
         'wstg_coverage': build_wstg_project_coverage(project, scan_id=scan_id),
     }
+    # Web security validation runs are project-scoped and deliberately not
+    # Scan FK records. Do not silently splice them into a single-scan export.
+    # They are NOT promoted to Vulnerability, independent validation or SOLVED.
+    if report_type == 'full' and not scan_id:
+        payload['authorization_observations'] = _authorization_observation_projection(project)
     if report_type == 'findings':
         payload['evidence'] = []
     elif report_type == 'evidence':
@@ -412,6 +466,25 @@ def _make_csv(payload: dict) -> bytes:
                 'wstg', item['wstg_id'], item['category'], item['classification'], item['state'],
                 item['has_observation'], item['evidence_records'], item['finding_records'],
                 '|'.join(item.get('capability_ids', [])), item.get('latest_observed_at') or '',
+            ])
+    observations = payload.get('authorization_observations')
+    if isinstance(observations, dict):
+        writer.writerow([])
+        writer.writerow(['kind', 'claim_policy', 'total', 'policy_mismatch_total', 'included', 'truncated'])
+        writer.writerow([
+            'authorization_observation_summary', 'observation-only',
+            observations['total'], observations['policy_mismatch_total'],
+            observations['included'], observations['truncated'],
+        ])
+        writer.writerow(['kind', 'observation_id', 'run_id', 'run_kind', 'run_status',
+                         'policy_matched', 'expected_allowed', 'observed_decision',
+                         'observation_fingerprint'])
+        for item in observations.get('items', []):
+            writer.writerow([
+                'authorization_observation', item['observation_id'],
+                item['run_id'], item['run_kind'], item['run_status'],
+                item['policy_matched'], item['expected_allowed'],
+                item['observed_decision'], item['observation_fingerprint'] or '',
             ])
     return output.getvalue().encode('utf-8')
 
@@ -450,6 +523,17 @@ def _make_pdf(payload: dict, title: str) -> bytes:
             f"{row['wstg_id']} | {row['state']} | evidence={row['evidence_records']} | findings={row['finding_records']}"
             for row in coverage.get('tests', [])[:97]
         )
+    observations = payload.get('authorization_observations')
+    if isinstance(observations, dict):
+        lines.extend([
+            '',
+            'Authorization policy observations (not confirmed vulnerabilities)',
+            f"Observed records: {observations['total']}; included: {observations['included']}",
+            f"Completed-run policy mismatches: {observations['policy_mismatch_total']}",
+            'Evidence role: observation only; independent verification NOT established',
+        ])
+        if observations['truncated']:
+            lines.append('Bounded report: additional records excluded; query authenticated project registry')
     for line in lines:
         if y < 45: pdf.showPage(); y = height - 45; pdf.setFont('Helvetica', 9)
         pdf.drawString(40, y, line[:150]); y -= 13
@@ -461,11 +545,15 @@ def _create_report(body: ReportCreate, user_id: str, payload: dict):
     if body.report_type not in SUPPORTED_REPORT_TYPES: raise HTTPException(status_code=400, detail=f'Unsupported report type: {body.report_type}')
     report = DataExport.objects.create(user_id=user_id, name=body.title, format=body.format, status=DataExport.Status.PROCESSING,
                                        resource_type='project_report', filters={'project_id': body.project_id, 'scan_id': body.scan_id, 'report_type': body.report_type, 'description': body.description, 'template_id': body.template_id},
-                                       fields=['project', 'scan', 'findings', 'evidence', 'wstg_coverage'], expires_at=django_timezone.now() + timedelta(days=django_settings.REPORT_RETENTION_DAYS))
+                                       fields=['project', 'scan', 'findings', 'evidence', 'wstg_coverage'] + (
+                                           ['authorization_observations'] if 'authorization_observations' in payload else []
+                                       ), expires_at=django_timezone.now() + timedelta(days=django_settings.REPORT_RETENTION_DAYS))
     if body.format == 'json': content, ext = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), 'json'
     elif body.format == 'csv': content, ext = _make_csv(payload), 'csv'
     else: content, ext = _make_pdf(payload, body.title), 'pdf'
-    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.artifact_sha256 = hashlib.sha256(content).hexdigest(); report.record_count = len(payload.get('findings', [])) + len(payload.get('evidence', [])) + len(payload.get('wstg_coverage', {}).get('tests', [])); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'artifact_sha256', 'record_count', 'status', 'completed_at']); return report
+    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.artifact_sha256 = hashlib.sha256(content).hexdigest(); report.record_count = (len(payload.get('findings', [])) + len(payload.get('evidence', []))
+    + len(payload.get('wstg_coverage', {}).get('tests', []))
+    + len(payload.get('authorization_observations', {}).get('items', []))); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'artifact_sha256', 'record_count', 'status', 'completed_at']); return report
 
 def _verify_report_artifact(report: DataExport) -> None:
     if not report.artifact_sha256:
