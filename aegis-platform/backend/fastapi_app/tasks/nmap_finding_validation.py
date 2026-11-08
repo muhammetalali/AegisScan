@@ -128,7 +128,8 @@ def _fail_validation(validation: ValidationRun, message: str, status: str = 'fai
         completed_at=datetime.now(timezone.utc),
     )
     if not updated:
-        return {'status': ValidationRun.Status.CANCELLED, 'validation_id': str(validation.id)}
+        return {'status': ValidationRun.objects.get(pk=validation.pk).status,
+                'validation_id': str(validation.id)}
     return {'status': status, 'validation_id': str(validation.id)}
 
 
