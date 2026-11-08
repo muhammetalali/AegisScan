@@ -1,0 +1,90 @@
+{
+  "schema": "aegis.external-lab-definition.planning.v1",
+  "id": "cyberpedia-northwind-auth-otp-v1",
+  "title_ar": "Cyberpedia Northwind Logistics — تجاوز آليات المصادقة والتحقق متعدد الخطوات",
+  "recorded_utc": "2026-11-09",
+  "origin": "https://challenge.cyberpedia.site",
+  "authorization": {
+    "source": "User-supplied challenge Rules of Engagement and existing AegisScan authorized asset",
+    "app_only": true,
+    "excluded": [
+      "denial-of-service",
+      "server exploitation",
+      "infrastructure enumeration",
+      "credential stuffing",
+      "brute-force",
+      "off-origin requests"
+    ],
+    "approved_scope": [
+      "https://challenge.cyberpedia.site/"
+    ],
+    "rate_policy_proposed": {
+      "max_requests_per_minute": 10,
+      "max_total_requests_per_attempt": 25,
+      "automatic_retries": 0
+    },
+    "execution_requires_latest_asset_authorization": true
+  },
+  "observed_client_contract": {
+    "login_page": "GET /login",
+    "login_script": "GET /js/login.js",
+    "login_submit": {
+      "method": "POST",
+      "path": "/api/login",
+      "content_type": "application/json",
+      "fields": [
+        "username",
+        "password"
+      ]
+    },
+    "otp_script": "GET /js/otp.js",
+    "otp_submit": {
+      "method": "POST",
+      "path": "/api/otp",
+      "content_type": "application/json",
+      "fields": [
+        "code"
+      ]
+    },
+    "redirect_source": "JSON response field redirect on successful login and OTP; must validate same-origin",
+    "success_page_path": "unknown until observed from authorized run"
+  },
+  "required_observations": [
+    "pre-authenticated negative control",
+    "login stage session changes",
+    "OTP step binding to same authenticated context",
+    "server-side completion enforcement at protected resource",
+    "session transition after successful second step",
+    "proof that protected resource is accessible only at expected stage",
+    "full screenshot of genuine success confirmation page"
+  ],
+  "execution": {
+    "stage": "DEFINITION_ONLY",
+    "supported_by_current_bac_runtime": false,
+    "automated_execution_enabled": false,
+    "needs_provider_enterprise_trust": true,
+    "needs_explicit_one_asset_selection": true,
+    "needs_governed_generic_step_runner": true,
+    "requires_human_validated_success_evidence": true,
+    "allow_credentials_from_browser_request": false,
+    "credentials_must_be_project_scoped_vault_references": true,
+    "raw_secrets_captured_in_evidence": false,
+    "lab_solved": false
+  },
+  "evidence_policy": {
+    "store_request_response_hashes": true,
+    "store_redacted_http_metadata": true,
+    "redact": [
+      "Authorization",
+      "Cookie",
+      "Set-Cookie",
+      "password",
+      "code",
+      "session tokens"
+    ],
+    "screenshot_after_verified_success_only": true,
+    "record_terminal_target_url_same_origin": true,
+    "record_timestamp_and_scan_ids": true,
+    "do_not_synthesize_success_screenshot": true
+  }
+}

@@ -19,6 +19,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py'
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
+      - 'aegis-platform/scripts/audit_external_web_lab_readiness.py'
+      - 'aegis-platform/scripts/test_audit_external_web_lab_readiness.py'
+      - 'docs/web-labs/cyberpedia-northwind-auth-otp.v1.json'
+      - 'docs/EXTERNAL_WEB_LABS_PRODUCTION_RUNBOOK_AR.md'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
       - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
@@ -87,6 +91,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py'
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
+      - 'aegis-platform/scripts/audit_external_web_lab_readiness.py'
+      - 'aegis-platform/scripts/test_audit_external_web_lab_readiness.py'
+      - 'docs/web-labs/cyberpedia-northwind-auth-otp.v1.json'
+      - 'docs/EXTERNAL_WEB_LABS_PRODUCTION_RUNBOOK_AR.md'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
       - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
@@ -189,6 +197,9 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: External Web Lab preflight and non-executable manifest safety (offline)
+        run: python -m unittest -q aegis-platform/scripts/test_audit_external_web_lab_readiness.py
 
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
