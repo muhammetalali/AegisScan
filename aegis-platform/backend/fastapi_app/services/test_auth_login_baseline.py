@@ -64,6 +64,15 @@ class AnonymousLoginBaseline(unittest.TestCase):
         self.assertNotIn("SESSION", str(result))
         self.assertNotIn("do-not-save", str(result))
 
+    def test_empty_transport_metadata_proves_no_provider_identity(self):
+        args = login_request_arguments(TARGET)
+        payload = payload_for(args["content"])
+        payload["transport_metadata"] = {}
+        summary = summarize_login_result(payload, request_arguments=args)
+        self.assertEqual(summary["transport_metadata"], {})
+        self.assertFalse(summary["lab_solved"])
+        self.assertFalse(summary["mfa_bypassed"])
+
     def test_health_probe_uses_same_redaction_boundary(self):
         from fastapi_app.services.burp_http_probe import summarize_health_result
         good = {
@@ -99,7 +108,6 @@ class AnonymousLoginBaseline(unittest.TestCase):
             {"transport": "https://secret.invalid"},
             {"transport": []},
             {"transport": {"secret": "credential"}},
-            {},
             ["not", "a", "mapping"],
         ):
             with self.subTest(metadata=str(mutation)[:75]):
