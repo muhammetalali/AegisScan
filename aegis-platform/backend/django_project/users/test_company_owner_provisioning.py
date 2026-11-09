@@ -37,6 +37,21 @@ def test_public_signup_is_disabled_and_creates_no_account():
 
 
 @pytest.mark.django_db
+def test_public_signup_remains_forbidden_when_ratelimit_cache_is_unavailable():
+    """Disabled public registration must not depend on Redis availability."""
+    from unittest.mock import patch
+
+    with patch('django_ratelimit.decorators.is_ratelimited', side_effect=ConnectionError('synthetic cache unavailable')):
+        response = APIClient().post('/api/v1/auth/register/', {
+            'email': 'public-redis-down@example.invalid',
+            'password': 'Strong-Test-Password!2026',
+            'password_confirm': 'Strong-Test-Password!2026',
+        }, format='json')
+    assert response.status_code == 403
+    assert not User.objects.filter(email='public-redis-down@example.invalid').exists()
+
+
+@pytest.mark.django_db
 def test_primary_owner_scan_types_are_not_filtered_by_employee_settings(company_owner, other_admin):
     # Owner access must remain available while managing the company remotely.
     company_owner.enabled_scan_types = []
