@@ -945,6 +945,10 @@ def _invocation_context(session_id, actor_id, op, arguments, idem):
         raise BurpMCPAuthorizationError('Burp MCP operation is not admitted by the pinned session contract.')
     provider_tool_name = str(allowed[op])
     safe_arguments = _safe_arguments(op, arguments, session.target_snapshot)
+    if (session.contract_snapshot.get('auth_baseline') is not None
+            and (op != 'burp.http_request'
+                 or safe_arguments.get('path') != AUTH_BASELINE_PATH)):
+        raise BurpMCPAuthorizationError('Login baseline can invoke only the sealed GET /login step.')
     if 'lab_step' in safe_arguments:
         validate_lab_bindings(session, actor_id)
         if safe_arguments['lab_step'] not in session_steps(session):
