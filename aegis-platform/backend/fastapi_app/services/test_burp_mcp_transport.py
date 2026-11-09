@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from fastapi_app.services.burp_mcp_transport import (
-    MCPTransportError, call_burp_sse, message_endpoint, PROTOCOL_VERSION,
+    MCPTransportError, call_burp_sse, inspect_burp_sse, message_endpoint, PROTOCOL_VERSION,
 )
 from fastapi_app.services.burp_http_probe import health_request_arguments, summarize_health_result
 
@@ -354,3 +354,52 @@ def test_private_burp_socket_requires_fixed_path_and_exact_local_provider(monkey
     })())
     with pytest.raises(BurpMCPProviderError, match='permissions'):
         _approved_unix_socket()
+
+
+def test_pre_admission_discovery_is_nonexecuting_and_emits_only_pinned_hashes():
+    with SSEContractServer() as server:
+        observed = inspect_burp_sse(endpoint=server.endpoint, request_id='discovery-synthetic')
+        assert [m['method'] for m in server.messages] == [
+            'initialize', 'notifications/initialized', 'tools/list',
+        ]
+        assert observed.result == {'discovery_only': True}
+        assert observed.metadata['retry_count'] == 0
+        assert observed.metadata['server_name'] == 'unrecognized'
+        assert len(observed.metadata['tool_schema_sha256']) == 64
+        assert len(observed.metadata['tools_sha256']) == 64
+        pin = observed.metadata['tool_schema_sha256']
+    with SSEContractServer() as server:
+        pinned = inspect_burp_sse(
+            endpoint=server.endpoint, request_id='discovery-pin', expected_schema_sha256=pin,
+        )
+        assert pinned.metadata['tool_schema_sha256'] == pin
+        assert not any(m['method'] == 'tools/call' for m in server.messages)
+
+
+@pytest.mark.parametrize('mode,reason', [
+    ('wrong_schema', 'tool_schema_mismatch'),
+    ('missing_tool', 'tool_not_advertised'),
+    ('wrong_protocol', 'initialization_mismatch'),
+    ('foreign_endpoint', 'endpoint_origin_mismatch'),
+])
+def test_pre_admission_discovery_rejects_invalid_server_without_tool_execution(mode, reason):
+    with SSEContractServer(mode) as server:
+        with pytest.raises(MCPTransportError, match=reason):
+            inspect_burp_sse(endpoint=server.endpoint, request_id='discovery-bad')
+        assert not any(m['method'] == 'tools/call' for m in server.messages)
+
+
+def test_pre_admission_discovery_rejects_stale_pins_and_remote_endpoints():
+    with SSEContractServer() as server:
+        with pytest.raises(MCPTransportError, match='tool_schema_pin_mismatch'):
+            inspect_burp_sse(endpoint=server.endpoint, request_id='pin-bad',
+                             expected_schema_sha256='f' * 64)
+        assert not any(m['method'] == 'tools/call' for m in server.messages)
+    with pytest.raises(MCPTransportError, match='discovery_only_loopback_required'):
+        inspect_burp_sse(endpoint='https://remote.example.invalid/sse',
+                         request_id='remote-forbidden')
+
+
+def test_pre_admission_discovery_invalid_request_id_fails_before_network():
+    with pytest.raises(MCPTransportError, match='invalid_call_limits'):
+        inspect_burp_sse(endpoint='http://127.0.0.1:9876/sse', request_id='')
