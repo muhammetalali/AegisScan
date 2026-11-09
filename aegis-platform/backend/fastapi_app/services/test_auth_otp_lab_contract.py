@@ -154,6 +154,64 @@ class AuthOTPContractTests(unittest.TestCase):
                          session_binding_ref=OTHER_SESSION)
         self.assertEqual(pending.stage, auth.Stage.OTP_PENDING)
 
+    def test_pre_otp_probe_requires_sealed_path_and_never_completes_mfa(self):
+        seeded = auth.AuthAttempt(attempt_ref=ATTEMPT, authorized_origin=ORIGIN,
+                                  pre_otp_probe_path="/protected")
+        seen, _ = auth.observe(seeded, step="login_form", http_status=200, body=b"<form>")
+        pending, _ = auth.observe(
+            seen, step="primary_login", http_status=200,
+            body=b'{"ok":true,"redirect":"/otp"}', session_binding_ref=SESSION,
+        )
+        weak, weak_summary = auth.observe(
+            pending, step="pre_otp_protected_fetch", http_status=200,
+            body=b"<h1>Synthetic protected content</h1>",
+            session_binding_ref=SESSION, request_path="/protected",
+        )
+        self.assertEqual(weak.stage, auth.Stage.OTP_PENDING)
+        self.assertEqual(weak_summary["result"], "pre_otp_protected_http_200_observed")
+        self.assertFalse(weak_summary["lab_solved"])
+        self.assertFalse(weak_summary["independent_success_screen_proven"])
+        self.assertNotIn("Synthetic protected content", str(weak_summary))
+        patched, patched_summary = auth.observe(
+            pending, step="pre_otp_protected_fetch", http_status=403,
+            body=b'{"ok":false}', session_binding_ref=SESSION,
+            request_path="/protected",
+        )
+        self.assertEqual(patched.stage, auth.Stage.OTP_PENDING)
+        self.assertEqual(patched_summary["result"], "pre_otp_protected_denial_observed")
+        self.assertEqual(patched_summary["status_code"], 403)
+
+    def test_pre_otp_probe_rejects_unsealed_or_other_identity_or_path(self):
+        unsealed = advance()
+        with self.assertRaises(auth.AuthLabContractError):
+            auth.observe(
+                unsealed, step="pre_otp_protected_fetch", http_status=200,
+                body=b"success", session_binding_ref=SESSION,
+                request_path="/protected",
+            )
+        seeded = auth.AuthAttempt(attempt_ref=ATTEMPT, authorized_origin=ORIGIN,
+                                  pre_otp_probe_path="/protected")
+        seen, _ = auth.observe(seeded, step="login_form", http_status=200, body=b"<form>")
+        pending, _ = auth.observe(seen, step="primary_login", http_status=200,
+                                  body=b'{"ok":true,"redirect":"/otp"}',
+                                  session_binding_ref=SESSION)
+        for opts in (
+            {"request_path": "/admin", "session_binding_ref": SESSION},
+            {"request_path": "/protected", "session_binding_ref": OTHER_SESSION},
+            {"request_path": "/protected?foo=bar", "session_binding_ref": SESSION},
+            {"request_path": "https://evil.invalid/", "session_binding_ref": SESSION},
+        ):
+            with self.subTest(opts=opts), self.assertRaises(auth.AuthLabContractError):
+                auth.observe(pending, step="pre_otp_protected_fetch",
+                             http_status=200, body=b"<h1/>", **opts)
+        with self.assertRaises(auth.AuthLabContractError):
+            auth.observe(seen, step="pre_otp_protected_fetch",
+                         http_status=200, body=b"<h1/>",
+                         request_path="/protected", session_binding_ref=SESSION)
+        with self.assertRaises(auth.AuthLabContractError):
+            auth.AuthAttempt(attempt_ref=ATTEMPT, authorized_origin=ORIGIN,
+                             pre_otp_probe_path="//evil.invalid")
+
     def test_otp_required_before_fetch_and_path_must_match(self):
         pending = advance()
         with self.assertRaises(auth.AuthLabContractError):
