@@ -335,6 +335,17 @@ def test_auth_baseline_and_bac_mode_cannot_be_cross_bound(client, context, defin
     assert not client[1]
 
 
+@pytest.mark.parametrize('arguments', [
+    {'path': []}, {'path': {}}, {'path': 3}, {'path': '/admin'},
+    {'path': '/login', 'headers': {'Cookie': 'forbidden'}},
+    {'path': '/login', 'body': 'forbidden'},
+])
+def test_auth_baseline_refuses_unbounded_or_unhashable_request_args(arguments):
+    from fastapi_app.services import burp_mcp_gateway as gateway
+    with pytest.raises(gateway.BurpMCPError):
+        gateway._safe_arguments('burp.http_request', arguments, 'https://challenge.cyberpedia.site/')
+
+
 def test_plain_probe_session_cannot_invoke_login_path(client, context):
     from fastapi_app.services import burp_mcp_gateway as gateway
     decision = approve(context, 'http://127.0.0.1:9876/sse')
