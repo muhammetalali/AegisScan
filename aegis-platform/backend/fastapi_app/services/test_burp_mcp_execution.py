@@ -346,6 +346,37 @@ def test_auth_baseline_refuses_unbounded_or_unhashable_request_args(arguments):
         gateway._safe_arguments('burp.http_request', arguments, 'https://challenge.cyberpedia.site/')
 
 
+def test_login_session_cannot_invoke_health_or_bac_operations(client, context):
+    from fastapi_app.services import burp_mcp_gateway as gateway
+    from fastapi_app.services.auth_login_baseline import AUTH_BASELINE_ID
+    decision = approve(context, 'http://127.0.0.1:9876/sse')
+    body = payload(context, decision)
+    body['options'] = {
+        'provider_decision_ref': str(decision.id),
+        'lab_definition_id': AUTH_BASELINE_ID,
+        'mode': 'auth_baseline',
+    }
+    response = client[0].post('/api/v1/capabilities/burp.mcp.gateway/execute', json=body)
+    assert response.status_code == 202, response.text
+    scan = Scan.objects.get(pk=response.json()['scan']['id'])
+    session = gateway.start_burp_mcp_session(
+        project_id=str(context[1].id), asset_id=str(context[2].id),
+        scan_id=str(scan.id), authorization_id=str(context[3].id),
+        actor_id=str(context[0].id), provider_name=decision.provider_name,
+        provider_version=decision.provider_version,
+        requested_operations=['burp.http_request'], idempotency_key='login-sealed-session',
+        max_invocations=1, rate_limit_per_minute=1, auth_baseline=True,
+    ).session
+    for arguments in ({'path': '/health'}, {}, {'lab_step': 'owner_baseline'}):
+        with pytest.raises(gateway.BurpMCPAuthorizationError):
+            gateway.invoke_burp_mcp(
+                session_id=str(session.id), actor_id=str(context[0].id),
+                operation='burp.http_request', arguments=arguments,
+                idempotency_key='not-login-step',
+            )
+    assert not BurpMCPInvocation.objects.exists()
+
+
 def test_plain_probe_session_cannot_invoke_login_path(client, context):
     from fastapi_app.services import burp_mcp_gateway as gateway
     decision = approve(context, 'http://127.0.0.1:9876/sse')
