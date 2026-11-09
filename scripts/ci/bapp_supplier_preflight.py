@@ -27,6 +27,9 @@ MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 20000
 MAX_RATIO = 100
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+MAVEN_COORDINATE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+MAX_COMPONENTS = 512
+
 
 
 class BAppPreflightError(ValueError):
@@ -100,6 +103,60 @@ def _manifest(raw: bytes) -> dict[str, str]:
     return props
 
 
+def _embedded_maven_components(
+    jar: zipfile.ZipFile, jar_entries: dict[str, zipfile.ZipInfo],
+) -> list[dict[str, str]]:
+    """Inventory explicit Maven properties; intentionally not a full supplier SBOM.
+
+    This only reports artifacts with embedded pom.properties. Shaded or repackaged
+    dependencies may not have properties and cannot be inferred as absent.
+    """
+    properties_paths = sorted(
+        name for name in jar_entries
+        if name.startswith("META-INF/maven/") and name.endswith("/pom.properties")
+    )
+    if len(properties_paths) > MAX_COMPONENTS:
+        raise BAppPreflightError("maven_component_count_limit")
+    found: dict[tuple[str, str], dict[str, str]] = {}
+    for path in properties_paths:
+        if len(path.split("/")) != 5:
+            raise BAppPreflightError("maven_properties_unsafe_path")
+        raw = jar.read(path)
+        if len(raw) > 16384:
+            raise BAppPreflightError("maven_properties_size_limit")
+        try:
+            body = raw.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise BAppPreflightError("maven_properties_invalid_encoding") from exc
+        props: dict[str, str] = {}
+        for line in body.splitlines():
+            line = line.strip()
+            if not line or line.startswith(("#", "!")):
+                continue
+            key, separator, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if separator != "=" or key not in {"groupId", "artifactId", "version"} or key in props:
+                raise BAppPreflightError("maven_properties_invalid_structure")
+            props[key] = value
+        if set(props) != {"groupId", "artifactId", "version"}:
+            raise BAppPreflightError("maven_properties_incomplete")
+        if any(not MAVEN_COORDINATE_RE.fullmatch(value) for value in props.values()):
+            raise BAppPreflightError("maven_coordinate_invalid")
+        if path != f"META-INF/maven/{props['groupId']}/{props['artifactId']}/pom.properties":
+            raise BAppPreflightError("maven_coordinate_path_mismatch")
+        key = (props["groupId"], props["artifactId"])
+        if key in found:
+            raise BAppPreflightError("maven_coordinate_duplicate")
+        found[key] = {
+            "group_id": props["groupId"],
+            "artifact_id": props["artifactId"],
+            "version": props["version"],
+            "package_url": f"pkg:maven/{props['groupId']}/{props['artifactId']}@{props['version']}",
+            "properties_sha256": _digest(raw),
+        }
+    return [found[key] for key in sorted(found)]
+
+
 def audit(
     archive: Path,
     *,
@@ -165,6 +222,7 @@ def audit(
                 ):
                     raise BAppPreflightError("jar_manifest_version_mismatch")
                 jar_count = len(jar_entries)
+                components = _embedded_maven_components(jar, jar_entries)
             member_digests = {
                 name: {"sha256": _digest(bundle.read(name)), "size_bytes": entries[name].file_size}
                 for name in sorted(EXPECTED_FILES)
@@ -181,6 +239,12 @@ def audit(
         "bapp_version": bapp["ScreenVersion"],
         "serial_version": expected_serial,
         "jar_entries_checked": jar_count,
+        "embedded_maven_component_inventory": {
+            "scope": "pom_properties_only_incomplete_not_vendor_sbom",
+            "complete_supplier_sbom": False,
+            "embedded_component_count": len(components),
+            "components": components,
+        },
         "jar_manifest_built_date_observed": jar_manifest.get("Built-Date", ""),
         "members": member_digests,
         "checks": {
@@ -205,6 +269,7 @@ def audit(
             "A signature blob is not proof that a trusted vendor signed these bytes.",
             "Hashes/manifest provided by the same untrusted download are not independent publisher attestations.",
             "No signer verification key, authenticated SBOM, builder provenance or reproducible build was supplied.",
+            "Maven coordinates only cover embedded pom.properties; missing shaded components and native dependencies are unknown.",
             "Byte-identical reproducibility remains unproven; the vendor JAR embeds a Built-Date field.",
         ],
     }

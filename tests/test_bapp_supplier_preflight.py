@@ -201,3 +201,78 @@ def test_supply_chain_ci_runs_new_fail_closed_controls():
     text = (root / ".github/workflows/supply-chain-release.yml").read_text()
     assert "tests/test_bapp_supplier_preflight.py" in text
     assert "scripts/ci/bapp_supplier_preflight.py" in text
+
+def test_maven_component_inventory_is_bounded_partial_and_pinned(tmp_path):
+    path = "META-INF/maven/io.netty/netty-common/pom.properties"
+    props = b"artifactId=netty-common\ngroupId=io.netty\nversion=4.2.6.Final\n"
+    archive, source = _archive(tmp_path, jar_files={
+        "META-INF/MANIFEST.MF": JAR_MANIFEST,
+        path: props,
+    })
+    data = _audit(archive, source)
+    inventory = data["embedded_maven_component_inventory"]
+    assert inventory["scope"] == "pom_properties_only_incomplete_not_vendor_sbom"
+    assert inventory["complete_supplier_sbom"] is False
+    assert inventory["embedded_component_count"] == 1
+    assert inventory["components"] == [{
+        "group_id": "io.netty", "artifact_id": "netty-common",
+        "version": "4.2.6.Final",
+        "package_url": "pkg:maven/io.netty/netty-common@4.2.6.Final",
+        "properties_sha256": _sha(props),
+    }]
+    assert data["checks"]["supplier_sbom_verified"] is False
+    assert data["governance"]["admission"] == "BLOCKED"
+
+
+@pytest.mark.parametrize("path,content,problem", [
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\nversion=1\nversion=2\n",
+     "maven_properties_invalid_structure"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=other\nartifactId=test\nversion=1\n",
+     "maven_coordinate_path_mismatch"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\nversion=1\nextrafield=none\n",
+     "maven_properties_invalid_structure"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\nversion=../../bad\n",
+     "maven_coordinate_invalid"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\n",
+     "maven_properties_incomplete"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\nversion=1\n" + b"#" + b"".join(hashlib.sha256(str(i).encode()).hexdigest().encode() for i in range(550)),
+     "maven_properties_size_limit"),
+    ("META-INF/maven/org.example/test/pom.properties",
+     b"groupId=org.example\nartifactId=test\nversion=\xff\n",
+     "maven_properties_invalid_encoding"),
+])
+def test_maven_inventory_deny_malformed_metadata(tmp_path, path, content, problem):
+    archive, source = _archive(tmp_path, jar_files={
+        "META-INF/MANIFEST.MF": JAR_MANIFEST,
+        path: content,
+    })
+    with pytest.raises(BAppPreflightError, match=problem):
+        _audit(archive, source)
+
+
+def test_maven_inventory_does_not_claim_zero_dependencies_means_clean(tmp_path):
+    archive, source = _archive(tmp_path)
+    data = _audit(archive, source)
+    inventory = data["embedded_maven_component_inventory"]
+    assert inventory["embedded_component_count"] == 0
+    assert inventory["complete_supplier_sbom"] is False
+    assert data["checks"]["supplier_sbom_verified"] is False
+
+
+def test_maven_inventory_always_sorted_in_stable_order(tmp_path):
+    props = {
+        "META-INF/maven/org.z/z/pom.properties": b"groupId=org.z\nartifactId=z\nversion=2\n",
+        "META-INF/maven/org.a/a/pom.properties": b"groupId=org.a\nartifactId=a\nversion=1\n",
+    }
+    archive, source = _archive(tmp_path, jar_files={
+        "META-INF/MANIFEST.MF": JAR_MANIFEST,
+        **props,
+    })
+    components = _audit(archive, source)["embedded_maven_component_inventory"]["components"]
+    assert [c["group_id"] for c in components] == ["org.a", "org.z"]
