@@ -131,7 +131,8 @@ def _http1_schema(tool: dict[str, Any]) -> dict[str, Any]:
 
 async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
                 request_id: str, bearer_token: str, deadline_seconds: float,
-                expected_schema_sha256: str = '', uds_path: str = '') -> MCPCallResult:
+                expected_schema_sha256: str = '', uds_path: str = '',
+                discover_only: bool = False) -> MCPCallResult:
     _origin(endpoint)
     if urlsplit(endpoint).query:
         raise MCPTransportError('invalid_endpoint')
@@ -233,10 +234,7 @@ async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: 
                     schema_sha = _sha(schema)
                     if expected_schema_sha256 and schema_sha != expected_schema_sha256:
                         raise MCPTransportError('tool_schema_pin_mismatch')
-                    result = await post('tools/call', {'name': provider_tool_name, 'arguments': arguments}, request_id)
-                    if result.get('isError') is True:
-                        raise MCPTransportError('tool_execution_error')
-                    return MCPCallResult(result=result, request_id=request_id, metadata={
+                    metadata = {
                         'transport': 'sse', 'protocol_version': PROTOCOL_VERSION,
                         'server_info_sha256': _sha(initialized['serverInfo']),
                         'server_name': 'burp-suite' if initialized['serverInfo'].get('name') == 'burp-suite' else 'unrecognized',
@@ -246,7 +244,16 @@ async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: 
                         else 'not_reported',
                         'tools_sha256': _sha(tools), 'tool_schema_sha256': schema_sha,
                         'edition': 'not_reported', 'retry_count': 0,
-                    })
+                    }
+                    if discover_only:
+                        # Pre-admission inventory only. Never issue tools/call,
+                        # even when the provider advertises a valid HTTP tool.
+                        return MCPCallResult(result={'discovery_only': True},
+                                             request_id=request_id, metadata=metadata)
+                    result = await post('tools/call', {'name': provider_tool_name, 'arguments': arguments}, request_id)
+                    if result.get('isError') is True:
+                        raise MCPTransportError('tool_execution_error')
+                    return MCPCallResult(result=result, request_id=request_id, metadata=metadata)
                 finally:
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
@@ -287,6 +294,35 @@ def call_burp_sse(*, endpoint: str, provider_tool_name: str, arguments: dict[str
                                  arguments=arguments, request_id=request_id, bearer_token=bearer_token,
                                  deadline_seconds=deadline_seconds, expected_schema_sha256=expected_schema_sha256,
                                  uds_path=uds_path, cancel_check=cancel_check))
+    except MCPTransportError:
+        raise
+    except (httpx.HTTPError, TimeoutError, ValueError, TypeError) as exc:
+        raise MCPTransportError('transport_failed') from exc
+
+
+def inspect_burp_sse(*, endpoint: str, request_id: str,
+                     deadline_seconds: float = 15.0,
+                     expected_schema_sha256: str = '',
+                     uds_path: str = '') -> MCPCallResult:
+    """Inventory local live MCP version/schema hashes without any HTTP tool invocation.
+
+    This is a pre-approval observation, not trusted-provider admission.
+    Only local MCP control-plane initialize and tools/list are permitted.
+    """
+    scheme, host, _port = _origin(endpoint)
+    if scheme != 'http' or host not in {'localhost', '127.0.0.1', '::1'}:
+        raise MCPTransportError('discovery_only_loopback_required')
+    if (not isinstance(request_id, str) or not request_id or len(request_id) > 128
+            or not 0 < deadline_seconds <= 30):
+        raise MCPTransportError('invalid_call_limits')
+    try:
+        return asyncio.run(_call(
+            endpoint=endpoint, provider_tool_name='send_http1_request',
+            arguments={}, request_id=request_id, bearer_token='',
+            deadline_seconds=deadline_seconds,
+            expected_schema_sha256=expected_schema_sha256,
+            uds_path=uds_path, discover_only=True,
+        ))
     except MCPTransportError:
         raise
     except (httpx.HTTPError, TimeoutError, ValueError, TypeError) as exc:
