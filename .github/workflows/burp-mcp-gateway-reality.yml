@@ -57,6 +57,8 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/auth_login_baseline.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_auth_login_baseline.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_lab_requests.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
@@ -130,6 +132,8 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/auth_login_baseline.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_auth_login_baseline.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_lab_requests.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
@@ -215,6 +219,11 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
 
+      - name: Server-built governed anonymous login baseline (offline)
+        run: |
+          cd aegis-platform/backend
+          python -m unittest -q fastapi_app.services.test_auth_login_baseline
+
       - name: In-process MFA vulnerable and patched controls (no network target)
         run: python -m pytest -q -p no:cacheprovider aegis-platform/e2e/test_auth_otp_fixture.py
 
@@ -234,6 +243,8 @@ jobs:
             aegis-platform/backend/fastapi_app/services/burp_http_probe.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/auth_login_baseline.py \
+            aegis-platform/backend/fastapi_app/services/test_auth_login_baseline.py \
             aegis-platform/backend/fastapi_app/services/burp_lab_requests.py \
             aegis-platform/backend/fastapi_app/services/lab_verification.py \
             aegis-platform/backend/fastapi_app/services/test_lab_verification.py \

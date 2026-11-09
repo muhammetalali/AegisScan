@@ -28,7 +28,7 @@ def resolve_probe_provider(*, project_id: str, decision_ref: str, target: str):
         )
         if current.id != selected.id:
             raise BurpMCPProviderError('قرار المزود المختار استبدل بقرار أحدث؛ حدّث المرجع.')
-        if (current.manifest.get('mcp_transport') != 'sse'
+        if (current.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}
                 or mapping.get('burp.http_request') != 'send_http1_request'):
             raise BurpMCPProviderError('المزود لا يعلن نقل SSE وأداة HTTP المتوافقة مع فحص المختبر.')
         return current

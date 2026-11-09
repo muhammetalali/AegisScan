@@ -16,6 +16,10 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from .burp_mcp_transport import call_burp_sse, MCPTransportError
 from .burp_http_probe import health_request_arguments, summarize_health_result
+from .auth_login_baseline import (
+    AUTH_BASELINE_ID, AUTH_BASELINE_PATH, login_request_arguments,
+    summarize_login_result,
+)
 from django.db import IntegrityError, transaction, connection, connections
 from django.utils import timezone
 
@@ -487,13 +491,14 @@ def _safe_arguments(operation: str, arguments: dict[str, Any] | None, target: st
                 raise BurpMCPAuthorizationError('Only a pinned BAC recipe step is accepted.')
             health_request_arguments(target)
             return {'target': target, 'lab_step': arguments['lab_step']}
-        if arguments.get('path', '/health') != '/health':
-            raise BurpMCPAuthorizationError('Only the server-built health probe or a bound BAC step is accepted.')
+        path = arguments.get('path', '/health')
+        if not isinstance(path, str) or path not in {'/health', AUTH_BASELINE_PATH}:
+            raise BurpMCPAuthorizationError('Only server-built health/login probes or bound BAC steps are accepted.')
         try:
             health_request_arguments(target)
         except ValueError as exc:
             raise BurpMCPAuthorizationError('HTTP probe requires an authorized web origin.') from exc
-        result['path'] = '/health'
+        result['path'] = path
     elif operation == 'burp.issue_details':
         issue_id = str(arguments.get('issue_id') or '').strip()
         if not _ISSUE_RE.fullmatch(issue_id):
@@ -672,6 +677,7 @@ def start_burp_mcp_session(
     rate_limit_per_minute: int = 10,
     ttl_seconds: int = 1800,
     runtime_evidence_ref: str | None = None,
+    auth_baseline: bool = False,
 ) -> BurpMCPSessionResult:
     name = _provider_name(provider_name, 'provider_name')
     version = _provider_name(provider_version, 'provider_version')
@@ -686,6 +692,11 @@ def start_burp_mcp_session(
     unknown = sorted(set(requested) - set(_OPERATION_ARGUMENTS))
     if unknown:
         raise BurpMCPAuthorizationError('Requested Burp MCP operations are not allowlisted: ' + ', '.join(unknown))
+    if auth_baseline and (
+        requested != ['burp.http_request'] or maximum != 1 or per_minute != 1
+        or lab_credential_refs is not None or runtime_evidence_ref is not None
+    ):
+        raise BurpMCPAuthorizationError('Anonymous login baseline requires one fixed HTTP invocation and no target identity.')
 
     with transaction.atomic():
         organization, project, asset, scan, decision = _lock_context(
@@ -728,6 +739,15 @@ def start_burp_mcp_session(
         )
         if credential is not None:
             contract['credential_version'] = int(credential.version)
+        if auth_baseline:
+            if governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
+                raise BurpMCPAuthorizationError('Login baseline requires approved MCP SSE transport.')
+            contract['auth_baseline'] = {
+                'definition_id': AUTH_BASELINE_ID,
+                'method': 'GET',
+                'path': AUTH_BASELINE_PATH,
+                'anonymous': True,
+            }
         if lab_credential_refs is not None:
             if requested != ['burp.http_request'] or governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
                 raise BurpMCPAuthorizationError('The BAC recipe requires the pinned SSE HTTP-only session.')
@@ -925,12 +945,27 @@ def _invocation_context(session_id, actor_id, op, arguments, idem):
         raise BurpMCPAuthorizationError('Burp MCP operation is not admitted by the pinned session contract.')
     provider_tool_name = str(allowed[op])
     safe_arguments = _safe_arguments(op, arguments, session.target_snapshot)
+    if (session.contract_snapshot.get('auth_baseline') is not None
+            and (op != 'burp.http_request'
+                 or safe_arguments.get('path') != AUTH_BASELINE_PATH)):
+        raise BurpMCPAuthorizationError('Login baseline can invoke only the sealed GET /login step.')
     if 'lab_step' in safe_arguments:
         validate_lab_bindings(session, actor_id)
         if safe_arguments['lab_step'] not in session_steps(session):
             raise BurpMCPAuthorizationError('This step is not part of the pinned session recipe.')
         if governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
             raise BurpMCPAuthorizationError('BAC recipe cannot fall back to a legacy provider.')
+    if safe_arguments.get('path') == AUTH_BASELINE_PATH:
+        expected = {
+            'definition_id': AUTH_BASELINE_ID,
+            'method': 'GET',
+            'path': AUTH_BASELINE_PATH,
+            'anonymous': True,
+        }
+        if session.contract_snapshot.get('auth_baseline') != expected:
+            raise BurpMCPAuthorizationError('Login baseline is not bound to a sealed session definition.')
+        if governance.manifest.get('mcp_transport') not in {'sse', 'sse-unix'}:
+            raise BurpMCPAuthorizationError('Login baseline requires approved MCP SSE transport.')
     arguments_sha256 = _sha(safe_arguments)
     request_fingerprint = _sha({
         'session_id': str(session.id),
@@ -1003,6 +1038,8 @@ def invoke_burp_mcp(
                 request_arguments, target_materials = lab_request(session=session, actor_id=actor_id,
                                                                  step=safe_arguments['lab_step'])
                 materials = (*materials, *target_materials)
+            elif op == 'burp.http_request' and safe_arguments.get('path') == AUTH_BASELINE_PATH:
+                request_arguments = login_request_arguments(session.target_snapshot)
             provider_request_id = _sha({'claim': str(claim.id), 'request_fingerprint': request_fingerprint})[:32]
         # Reservation is committed. No tenant/project/asset/scan/session row lock spans the network.
         raw_result, response_request_id = _perform_mcp_call(
@@ -1016,6 +1053,8 @@ def invoke_burp_mcp(
             if 'lab_step' in safe_arguments:
                 result_summary = summarize_lab_result(raw_result, request_arguments=request_arguments,
                                                       session=session, step=safe_arguments['lab_step'])
+            elif op == 'burp.http_request' and safe_arguments.get('path') == AUTH_BASELINE_PATH:
+                result_summary = summarize_login_result(raw_result, request_arguments=request_arguments)
             elif op == 'burp.http_request':
                 result_summary = summarize_health_result(raw_result)
             else:
