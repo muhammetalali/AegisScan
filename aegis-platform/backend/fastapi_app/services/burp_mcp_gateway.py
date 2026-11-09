@@ -492,7 +492,7 @@ def _safe_arguments(operation: str, arguments: dict[str, Any] | None, target: st
             health_request_arguments(target)
             return {'target': target, 'lab_step': arguments['lab_step']}
         path = arguments.get('path', '/health')
-        if path not in {'/health', AUTH_BASELINE_PATH}:
+        if not isinstance(path, str) or path not in {'/health', AUTH_BASELINE_PATH}:
             raise BurpMCPAuthorizationError('Only server-built health/login probes or bound BAC steps are accepted.')
         try:
             health_request_arguments(target)
