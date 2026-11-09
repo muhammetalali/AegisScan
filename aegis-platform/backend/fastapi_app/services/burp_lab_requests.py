@@ -143,7 +143,7 @@ def summarize_lab_result(payload, *, request_arguments, session, step):
         'status_code': int(first[1]), 'resource': resource,
         'response_sha256': hashlib.sha256(response.encode()).hexdigest(),
         'wire_request_sha256': hashlib.sha256(request_arguments['content'].encode()).hexdigest(),
-        'transport_metadata': payload['transport_metadata'],
+        'transport_metadata': safe_transport_metadata(payload),
         'raw_request_response_persisted': False, 'lab_solved': False,
         'verdict': 'observation_only',
     }
