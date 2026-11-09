@@ -149,8 +149,10 @@ class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
-    @method_decorator(ratelimit(key='ip', rate='5/h', method='POST', block=True))
     def post(self, request):
+        # This route always denies registration. Do not run the Redis-backed
+        # rate limiter before the deterministic 403: a cache outage must not
+        # convert a permanently forbidden action into HTTP 500.
         # Company-only service: public callers may not create active accounts.
         # CI/production E2E identities use the existing protected server-side
         # one-run fixture provisioner, never this public endpoint.
