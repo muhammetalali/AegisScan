@@ -3,7 +3,61 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from urllib.parse import urlsplit
+
+
+# These are the only transport diagnostics admitted to durable evidence. Treat
+# even the MCP adapter result as untrusted at the evidence serialization edge.
+# The "contract-*" values are synthetic offline test transports, never a trust
+# or provider approval signal.
+_TRANSPORTS = frozenset({"sse", "sse-unix", "contract-only", "contract-double"})
+_METADATA_KEYS = frozenset({
+    "transport", "protocol_version", "server_info_sha256", "server_name",
+    "server_reported_version", "tools_sha256", "tool_schema_sha256",
+    "edition", "retry_count",
+})
+_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_VERSION_RE = re.compile(r"^(?:[0-9]{1,4}\.){2}[0-9]{1,4}$")
+
+
+def safe_transport_metadata(payload: dict) -> dict:
+    metadata = payload.get("transport_metadata")
+    if not isinstance(metadata, dict) or set(metadata) - _METADATA_KEYS:
+        raise ValueError("Unexpected or unbounded MCP transport metadata.")
+    if (not isinstance(metadata.get("transport"), str)
+            or metadata["transport"] not in _TRANSPORTS):
+        raise ValueError("Unrecognized MCP transport.")
+    safe = {"transport": metadata["transport"]}
+    for name in ("server_info_sha256", "tools_sha256", "tool_schema_sha256"):
+        if name in metadata:
+            value = metadata[name]
+            if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
+                raise ValueError("Malformed MCP transport digest.")
+            safe[name] = value
+    if "protocol_version" in metadata:
+        if metadata["protocol_version"] != "2024-11-05":
+            raise ValueError("Unexpected MCP protocol version.")
+        safe["protocol_version"] = metadata["protocol_version"]
+    if "server_name" in metadata:
+        if metadata["server_name"] not in ("burp-suite", "unrecognized"):
+            raise ValueError("Unexpected MCP server name.")
+        safe["server_name"] = metadata["server_name"]
+    if "server_reported_version" in metadata:
+        value = metadata["server_reported_version"]
+        if (not isinstance(value, str)
+                or (value != "not_reported" and not _VERSION_RE.fullmatch(value))):
+            raise ValueError("Unexpected MCP server version.")
+        safe["server_reported_version"] = value
+    if "edition" in metadata:
+        if metadata["edition"] != "not_reported":
+            raise ValueError("Unverified MCP product edition.")
+        safe["edition"] = "not_reported"
+    if "retry_count" in metadata:
+        if type(metadata["retry_count"]) is not int or metadata["retry_count"] != 0:
+            raise ValueError("MCP probe must never report an automatic retry.")
+        safe["retry_count"] = 0
+    return safe
 
 
 def health_request_arguments(target: str) -> dict:
@@ -65,7 +119,7 @@ def summarize_health_result(payload: dict) -> dict:
         data = None
     marker = bool(isinstance(data, dict) and data.get('fixture') == 'bac-target' and data.get('status') == 'ok')
     return {
-        'transport_metadata': payload['transport_metadata'], 'status_code': status,
+        'transport_metadata': safe_transport_metadata(payload), 'status_code': status,
         'response_sha256': hashlib.sha256(raw.encode()).hexdigest(),
         'response_format': response_format,
         'fixture_health_marker_matches': marker, 'transport_probe_passed': status == 200 and marker,
