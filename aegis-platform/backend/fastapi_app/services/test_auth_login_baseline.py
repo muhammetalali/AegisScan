@@ -64,6 +64,27 @@ class AnonymousLoginBaseline(unittest.TestCase):
         self.assertNotIn("SESSION", str(result))
         self.assertNotIn("do-not-save", str(result))
 
+    def test_health_probe_uses_same_redaction_boundary(self):
+        from fastapi_app.services.burp_http_probe import summarize_health_result
+        good = {
+            "mcp_result": {"content": [{
+                "type": "text",
+                "text": 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n'
+                        '\r\n{"fixture":"bac-target","status":"ok"}',
+            }]},
+            "transport_metadata": {"transport": "sse", "retry_count": 0},
+        }
+        result = summarize_health_result(good)
+        self.assertTrue(result["transport_probe_passed"])
+        self.assertEqual(result["transport_metadata"], good["transport_metadata"])
+        for metadata in (
+            {"transport": "sse", "Authorization": "Bearer secret"},
+            {"transport": "sse", "retry_count": 1},
+            {"transport": ["secret"]},
+        ):
+            with self.subTest(metadata=metadata), self.assertRaises(ValueError):
+                summarize_health_result({**good, "transport_metadata": metadata})
+
     def test_rejects_untrusted_metadata_before_durable_evidence(self):
         args = login_request_arguments(TARGET)
         for mutation in (
