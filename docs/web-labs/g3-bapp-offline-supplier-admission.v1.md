@@ -32,3 +32,16 @@ Use a new output path for each receipt, never overwrite previous evidence. No ar
 5. **Governed local execution:** use the existing Scan -> Celery -> Burp MCP -> Evidence -> Independent Verification -> Remediation -> Report workflow on an owned resettable vulnerable/patched fixture. Do not claim new solved Academy/Cyberpedia labs without genuine verified results and required external permissions.
 
 Even with archive integrity verified, the preflight's governance.admission is **BLOCKED**. Merge source prep under protected GitHub CI, then request **one** protected Ubuntu deployment only after all remaining implementation/acceptance obligations for G3 are ready. Never reuse expired or mismatched deploy requests.
+
+## Additional G3.2 preliminary dependency evidence (not a vendor SBOM)
+
+The offline checker also enumerates embedded JAR Maven metadata using only the
+bounded META-INF/maven/<group>/<artifact>/pom.properties entries. It requires
+consistent group/artifact paths, safe coordinate strings, unique components,
+strict property structure, and deterministic sorting. Records include Maven
+package URLs and exact properties hashes, anchored in the pinned BApp archive
+digest. **This inventory is incomplete by design:** shaded libraries, missing
+pom.properties, custom native dependencies and internal modules may be absent.
+It is not an authenticated vendor SBOM, not a vulnerability clearance, and
+cannot promote approved/trusted. A complete independently reviewed supplier
+SBOM/provenance and authenticated vendor signature remain required.
