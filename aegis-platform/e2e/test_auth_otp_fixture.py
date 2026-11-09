@@ -75,6 +75,48 @@ def test_authorized_two_stage_sequence_reaches_protected(mode):
         assert "LOCAL_FIXTURE_SUCCESS" in success.text
 
 
+@pytest.mark.parametrize(
+    "mode,status,observation",
+    [
+        ("vulnerable", 200, "pre_otp_protected_http_200_observed"),
+        ("patched", 403, "pre_otp_protected_denial_observed"),
+    ],
+)
+def test_contract_pre_otp_probe_detects_fixture_difference_without_solved_claim(mode, status, observation):
+    backend = _ROOT.parent / "backend/fastapi_app/services/auth_otp_lab_contract.py"
+    spec = importlib.util.spec_from_file_location("auth_otp_pre_otp_contract", backend)
+    auth = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = auth
+    spec.loader.exec_module(auth)
+    with client(mode) as c:
+        attempt = auth.AuthAttempt(
+            attempt_ref=str(uuid4()), authorized_origin="https://local-fixture.invalid",
+            pre_otp_probe_path="/protected",
+        )
+        login_page = c.get("/login")
+        attempt, _ = auth.observe(attempt, step="login_form",
+                                  http_status=login_page.status_code, body=login_page.content)
+        response = c.post("/api/login", json={
+            "username": "local-tester", "password": "local-lab-secret",
+        })
+        session_ref = str(uuid4())
+        attempt, _ = auth.observe(
+            attempt, step="primary_login", http_status=response.status_code,
+            body=response.content, session_binding_ref=session_ref,
+        )
+        actual = c.get("/protected")
+        assert actual.status_code == status
+        attempt, result = auth.observe(
+            attempt, step="pre_otp_protected_fetch", http_status=actual.status_code,
+            body=actual.content, request_path="/protected",
+            session_binding_ref=session_ref,
+        )
+        assert attempt.stage == auth.Stage.OTP_PENDING
+        assert result["result"] == observation
+        assert result["lab_solved"] is False
+        assert result["raw_response_persisted"] is False
+        assert result["independent_success_screen_proven"] is False
+
 def test_two_browser_contexts_never_share_authentication_state():
     app = fixture.create_app("patched")
     with TestClient(app, base_url="https://local-fixture.invalid") as first:
