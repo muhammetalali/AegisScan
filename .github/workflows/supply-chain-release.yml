@@ -11,6 +11,8 @@ on:
       - 'aegis-platform/scripts/install_cosign_release.sh'
       - 'aegis-platform/scripts/verify_image_supply_chain.sh'
       - 'tests/test_supply_chain_provenance.py'
+      - 'tests/test_bapp_supplier_preflight.py'
+      - 'scripts/ci/bapp_supplier_preflight.py'
   push:
     branches: [main]
   workflow_dispatch:
@@ -36,7 +38,8 @@ jobs:
         run: |
           sh aegis-platform/scripts/install_cosign_release.sh "$RUNNER_TEMP/cosign"
           "$RUNNER_TEMP/cosign" version
-      - run: python -m pytest -q tests/test_supply_chain_provenance.py
+      - run: python -m pytest -q tests/test_supply_chain_provenance.py tests/test_bapp_supplier_preflight.py
+      - run: python -m py_compile scripts/ci/bapp_supplier_preflight.py
       - run: |
           shellcheck aegis-platform/scripts/verify_image_supply_chain.sh
           shellcheck aegis-platform/scripts/install_cosign_release.sh
