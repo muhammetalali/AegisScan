@@ -120,8 +120,14 @@ def _json_reply(data: bytes) -> dict:
                 raise AuthLabContractError("Duplicate JSON field in authentication response.")
             out[key] = value
         return out
+    def reject_nonfinite(_value: str) -> None:
+        raise AuthLabContractError("Non-finite JSON values are forbidden.")
+
     try:
-        reply = json.loads(data.decode("utf-8"), object_pairs_hook=unique_pairs)
+        reply = json.loads(
+            data.decode("utf-8"), object_pairs_hook=unique_pairs,
+            parse_constant=reject_nonfinite,
+        )
     except (ValueError, UnicodeDecodeError) as exc:
         raise AuthLabContractError("Authentication response is not strict JSON.") from exc
     if not isinstance(reply, dict):
@@ -173,7 +179,7 @@ def observe(
     following_stage = attempt.stage
     following_path = attempt.next_path
     if step == "login_form":
-        if http_status == 200 and b"<" in body[:_BODY_LIMIT]:
+        if http_status == 200 and b"<form" in body[:_BODY_LIMIT].lower():
             result, following_stage = "login_form_observed", Stage.LOGIN_SEEN
     elif step in _AUTH_JSON_STEPS:
         reply = _json_reply(body)
@@ -191,7 +197,13 @@ def observe(
 
     new = replace(
         attempt, stage=following_stage,
-        session_binding_ref=binding or attempt.session_binding_ref,
+        session_binding_ref=(
+            attempt.session_binding_ref or (
+                binding if following_stage in {
+                    Stage.OTP_PENDING, Stage.OTP_VERIFIED, Stage.PROTECTED_OBSERVED
+                } else None
+            )
+        ),
         next_path=following_path,
         observations=attempt.observations + 1,
     )
