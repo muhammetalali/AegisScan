@@ -35,8 +35,8 @@ pytestmark = pytest.mark.django_db(transaction=True)
 def approve(context, endpoint, *, transport='sse', marker='first'):
     user, project, *_ = context
     manifest = _manifest(endpoint)
-    if transport == 'sse':
-        manifest.update(mcp_transport='sse', mcp_tools={'burp.http_request': 'send_http1_request'})
+    if transport in {'sse', 'sse-unix'}:
+        manifest.update(mcp_transport=transport, mcp_tools={'burp.http_request': 'send_http1_request'})
     manifest['review_marker'] = marker
     persist_provider_approval(project, str(user.id), {
         'provider_name': 'burp-suite-mcp', 'provider_version': '2026.9', 'status': 'approved',
@@ -250,3 +250,120 @@ def test_preview_rejects_malformed_transport_metadata_without_server_error(conte
     assert result['provider']['state'] == 'invalid_transport'
     assert result['metadata_ready'] is False
     assert result['execution_ready'] is False
+
+
+
+def test_auth_login_baseline_uses_governed_queue_one_anonymous_get(client, context, monkeypatch):
+    """One safe GET through the existing claim/evidence/scan path; no login attempt."""
+    from fastapi_app.services import burp_mcp_gateway as gateway
+    from fastapi_app.services.auth_login_baseline import AUTH_BASELINE_ID
+    from django_project.scans.models import ScanLog
+    decision = approve(context, 'http://127.0.0.1:9876/sse')
+    body = payload(context, decision)
+    body['options'] = {
+        'provider_decision_ref': str(decision.id),
+        'lab_definition_id': AUTH_BASELINE_ID,
+        'mode': 'auth_baseline',
+    }
+    response = client[0].post('/api/v1/capabilities/burp.mcp.gateway/execute', json=body)
+    assert response.status_code == 202, response.text
+    scan = Scan.objects.get(pk=response.json()['scan']['id'])
+    assert len(client[1]) == 1
+    allow_test_target(monkeypatch)
+    observed_calls = []
+
+    def transport(**kw):
+        assert not connections['default'].in_atomic_block
+        req = kw['request_arguments']
+        assert req['content'].startswith('GET /login HTTP/1.1\r\n')
+        assert 'Authorization:' not in req['content']
+        assert 'Cookie:' not in req['content']
+        observed_calls.append(req['content'])
+        raw = (
+            'HttpRequestResponse{httpRequest=' + req['content']
+            + ', httpResponse=HTTP/1.1 200 OK\r\n'
+            + 'Content-Type: text/html\r\nSet-Cookie: secret-do-not-persist\r\n\r\n'
+            + "<form id='synthetic'></form>"
+            + ", messageAnnotations=Annotations{comment='', highlightColor=NONE}}"
+        )
+        return {
+            'mcp_result': {'content': [{'type': 'text', 'text': raw}]},
+            'transport_metadata': {'transport': 'contract-double', 'retry_count': 0},
+        }, kw['request_id']
+
+    monkeypatch.setattr(gateway, '_perform_mcp_call', transport)
+    result = worker.run_burp_mcp_probe.run(str(scan.id))
+    assert result['status'] == 'completed', result
+    assert result['auth_login_baseline_observed'] is True
+    assert result['transport_probe_passed'] is False
+    assert result['lab_solved'] is False
+    assert len(observed_calls) == 1
+    scan.refresh_from_db()
+    summary = scan.engine_results['burp-mcp']
+    assert summary['definition_id'] == AUTH_BASELINE_ID
+    assert summary['path'] == '/login'
+    assert summary['login_form_observed'] is True
+    assert summary['lab_solved'] is False
+    assert summary['mfa_bypassed'] is False
+    assert BurpMCPInvocation.objects.count() == 1
+    assert Evidence.objects.count() >= 1
+    record = '\n'.join(Evidence.objects.values_list('raw_output', flat=True))
+    record += '\n'.join(ScanLog.objects.values_list('message', flat=True))
+    assert 'secret-do-not-persist' not in record
+    assert 'synthetic' not in record
+    repeated = worker.run_burp_mcp_probe.run(str(scan.id))
+    assert repeated['status'] in {'completed', 'skipped'}
+    assert len(observed_calls) == 1
+
+
+@pytest.mark.parametrize('definition,mode', [
+    ('bac-orders-v1', 'auth_baseline'),
+    ('auth-login-baseline-v1', 'transport_probe'),
+    ('auth-login-baseline-v1', 'lab_sequence'),
+])
+def test_auth_baseline_and_bac_mode_cannot_be_cross_bound(client, context, definition, mode):
+    decision = approve(context, 'http://127.0.0.1:9876/sse')
+    body = payload(context, decision)
+    body['options'] = {
+        'provider_decision_ref': str(decision.id),
+        'lab_definition_id': definition,
+        'mode': mode,
+    }
+    response = client[0].post('/api/v1/capabilities/burp.mcp.gateway/execute', json=body)
+    assert response.status_code in {400, 409}, response.text
+    assert Scan.objects.count() == 0
+    assert not client[1]
+
+
+def test_plain_probe_session_cannot_invoke_login_path(client, context):
+    from fastapi_app.services import burp_mcp_gateway as gateway
+    decision = approve(context, 'http://127.0.0.1:9876/sse')
+    scan = schedule(client, context, decision)
+    session = gateway.start_burp_mcp_session(
+        project_id=str(context[1].id), asset_id=str(context[2].id),
+        scan_id=str(scan.id), authorization_id=str(context[3].id),
+        actor_id=str(context[0].id), provider_name=decision.provider_name,
+        provider_version=decision.provider_version,
+        requested_operations=['burp.http_request'],
+        idempotency_key='plain-session-do-not-upgrade', max_invocations=1,
+        rate_limit_per_minute=1,
+    ).session
+    with pytest.raises(gateway.BurpMCPAuthorizationError):
+        gateway.invoke_burp_mcp(
+            session_id=str(session.id), actor_id=str(context[0].id),
+            operation='burp.http_request', arguments={'path': '/login'},
+            idempotency_key='invalid-upgrade',
+        )
+    assert not BurpMCPInvocation.objects.exists()
+
+
+def test_resolver_accepts_only_pinned_sse_unix_origin_when_configured(context, monkeypatch):
+    from fastapi_app.services.burp_mcp_execution import resolve_probe_provider
+    monkeypatch.setenv('AEGIS_BURP_MCP_UNIX_SOCKET', '/app/media/.burp-mcp-bridge/mcp.sock')
+    decision = approve(context, 'http://127.0.0.1:9876/', transport='sse-unix')
+    provider = resolve_probe_provider(
+        project_id=str(context[1].id), decision_ref=str(decision.id),
+        target='http://bac-target:18081',
+    )
+    assert provider.id == decision.id
+    assert provider.manifest['mcp_transport'] == 'sse-unix'
