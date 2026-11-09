@@ -271,6 +271,10 @@ def test_wrapper_mismatch_and_arbitrary_resource_fields_cannot_become_evidence(c
     payload['mcp_result']['content'][0]['text'] = 'HTTP/1.1 200 OK\r\n\r\n' + json.dumps({'id': '51', 'owner_id': 'alice-token', 'tenant_id': 'tenant-a'})
     result = summarize_lab_result(payload, request_arguments=arguments, session=session, step='owner_baseline')
     assert result['resource'] is None and 'alice-token' not in json.dumps(result)
+    assert result['transport_metadata'] == {}  # Empty offline metadata proves no provider trust.
+    payload['transport_metadata'] = {'transport': 'sse', 'Cookie': 'must-never-persist'}
+    with pytest.raises(ValueError):
+        summarize_lab_result(payload, request_arguments=arguments, session=session, step='owner_baseline')
 
 
 @pytest.mark.parametrize('state', [Scan.Status.COMPLETED, Scan.Status.FAILED])
