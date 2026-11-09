@@ -17,7 +17,10 @@ from uuid import UUID
 
 _BODY_LIMIT = 65_536
 _PATH_RE = re.compile(r"/[A-Za-z0-9._~/-]{0,510}")
-_STAGES = frozenset({"login_form", "primary_login", "otp_submit", "protected_fetch"})
+_STAGES = frozenset({
+    "login_form", "primary_login", "pre_otp_protected_fetch",
+    "otp_submit", "protected_fetch",
+})
 _AUTH_JSON_STEPS = frozenset({"primary_login", "otp_submit"})
 
 
@@ -41,6 +44,8 @@ class AuthAttempt:
     stage: Stage = Stage.ANONYMOUS
     session_binding_ref: str | None = None
     next_path: str | None = None
+    # Sealed control-plane recipe path, never supplied by an untrusted requester.
+    pre_otp_probe_path: str | None = None
     observations: int = 0
     max_observations: int = 25
 
@@ -61,6 +66,8 @@ class AuthAttempt:
             _binding_ref(self.session_binding_ref)
         if self.next_path is not None:
             _approved_path(self.next_path)
+        if self.pre_otp_probe_path is not None:
+            _approved_path(self.pre_otp_probe_path)
 
 
 def _scope(origin: str) -> tuple[str, str, int]:
@@ -142,8 +149,9 @@ def observe(
 ) -> tuple[AuthAttempt, dict]:
     """Evaluate one trusted worker observation, without any HTTP or DB write.
 
-    Valid stages: login_form → primary_login → otp_submit → protected_fetch.
-    A protected page HTTP 200 is only an observation, never proof of lab solved.
+    Valid stages: login_form → primary_login → optional sealed pre-OTP
+    protected probe → otp_submit → protected_fetch. Even pre-MFA HTTP 200
+    is an observation, not independently verified proof of a lab solution.
     """
     if not isinstance(attempt, AuthAttempt):
         raise AuthLabContractError("An existing governed attempt is required.")
@@ -158,6 +166,7 @@ def observe(
     expected = {
         "login_form": Stage.ANONYMOUS,
         "primary_login": Stage.LOGIN_SEEN,
+        "pre_otp_protected_fetch": Stage.OTP_PENDING,
         "otp_submit": Stage.OTP_PENDING,
         "protected_fetch": Stage.OTP_VERIFIED,
     }[step]
@@ -165,13 +174,17 @@ def observe(
         raise AuthLabContractError("Authentication step violates the bound state machine.")
 
     binding = None
-    if step in {"primary_login", "otp_submit", "protected_fetch"}:
+    if step in {"primary_login", "pre_otp_protected_fetch", "otp_submit", "protected_fetch"}:
         binding = _binding_ref(session_binding_ref)
         if attempt.session_binding_ref is not None and attempt.session_binding_ref != binding:
             raise AuthLabContractError("Cross-session or stale MFA observation.")
     if step == "protected_fetch":
         if request_path is None or _approved_path(request_path) != attempt.next_path:
             raise AuthLabContractError("Protected page must be the verified server-issued redirect.")
+    elif step == "pre_otp_protected_fetch":
+        if (attempt.pre_otp_probe_path is None or request_path is None
+                or _approved_path(request_path) != attempt.pre_otp_probe_path):
+            raise AuthLabContractError("Pre-OTP probe requires a sealed exact protected path.")
     elif request_path is not None:
         raise AuthLabContractError("Client supplied a non-allowlisted request path.")
 
@@ -189,6 +202,12 @@ def observe(
             following_stage = Stage.OTP_PENDING if step == "primary_login" else Stage.OTP_VERIFIED
         elif 400 <= http_status < 500 or reply.get("ok") is False:
             result = "denied"
+    elif step == "pre_otp_protected_fetch":
+        if http_status == 200:
+            result = "pre_otp_protected_http_200_observed"
+        elif http_status in {401, 403}:
+            result = "pre_otp_protected_denial_observed"
+        # Remain OTP_PENDING even if HTTP 200; never grant OTP_VERIFIED.
     elif step == "protected_fetch":
         if http_status == 200:
             result, following_stage = "protected_response_observed", Stage.PROTECTED_OBSERVED
