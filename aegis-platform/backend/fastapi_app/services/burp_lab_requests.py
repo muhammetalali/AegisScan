@@ -7,7 +7,7 @@ import re
 
 from django_project.system.credential_models import CredentialSecret
 from django_project.system.credential_vault import CredentialVaultDenied
-from .burp_http_probe import health_request_arguments
+from .burp_http_probe import health_request_arguments, safe_transport_metadata
 from .credential_execution import (
     authorize_credential_refs_for_execution, resolve_credential_refs_for_worker,
 )
