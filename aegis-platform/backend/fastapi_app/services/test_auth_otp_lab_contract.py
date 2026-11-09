@@ -48,16 +48,12 @@ class AuthOTPContractTests(unittest.TestCase):
 
     def test_rejects_unapproved_origins(self):
         for origin in (
-            "http://challenge.cyberpedia.site", "https://evil.invalid",
+            "http://challenge.cyberpedia.site",
             "https://challenge.cyberpedia.site/admin", "https://a:b@challenge.cyberpedia.site",
             "https://challenge.cyberpedia.site?x=1", "https://challenge.cyberpedia.site:8443",
             "https://challenge.cyberpedia.site\n", "",
         ):
             with self.subTest(origin=origin):
-                if origin == "https://evil.invalid":
-                    # Any valid HTTPS origin is allowed only if supplied by the
-                    # authoritative asset-binding caller. This module cannot infer that.
-                    continue
                 with self.assertRaises(auth.AuthLabContractError):
                     auth.AuthAttempt(attempt_ref=ATTEMPT, authorized_origin=origin)
 
@@ -92,6 +88,25 @@ class AuthOTPContractTests(unittest.TestCase):
         self.assertEqual(next_state.stage, auth.Stage.LOGIN_SEEN)
         self.assertEqual(summary["result"], "denied")
         self.assertFalse(summary["lab_solved"])
+
+    def test_denied_primary_login_does_not_bind_a_failed_session(self):
+        login, _ = auth.observe(make(), step="login_form", http_status=200, body=b"<form>")
+        denied, _ = auth.observe(login, step="primary_login", http_status=401,
+                                 body=b'{"ok":false}', session_binding_ref=SESSION)
+        self.assertIsNone(denied.session_binding_ref)
+        accepted, _ = auth.observe(
+            denied, step="primary_login", http_status=200,
+            body=b'{"ok":true,"redirect":"/otp"}', session_binding_ref=OTHER_SESSION,
+        )
+        self.assertEqual(accepted.session_binding_ref, OTHER_SESSION)
+        self.assertEqual(accepted.stage, auth.Stage.OTP_PENDING)
+
+    def test_success_response_rejects_nonfinite_json(self):
+        login, _ = auth.observe(make(), step="login_form", http_status=200, body=b"<form>")
+        with self.assertRaises(auth.AuthLabContractError):
+            auth.observe(login, step="primary_login", http_status=200,
+                         body=b'{"ok":true,"redirect":"/otp","error":NaN}',
+                         session_binding_ref=SESSION)
 
     def test_negative_otp_preserves_pending(self):
         pending = advance()
