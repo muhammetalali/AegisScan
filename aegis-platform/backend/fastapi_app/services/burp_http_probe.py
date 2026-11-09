@@ -25,6 +25,10 @@ def safe_transport_metadata(payload: dict) -> dict:
     metadata = payload.get("transport_metadata")
     if not isinstance(metadata, dict) or set(metadata) - _METADATA_KEYS:
         raise ValueError("Unexpected or unbounded MCP transport metadata.")
+    # Empty metadata is an explicit absence of a transport assertion, as used
+    # by older offline parser tests. It grants no provider trust or authority.
+    if not metadata:
+        return {}
     if (not isinstance(metadata.get("transport"), str)
             or metadata["transport"] not in _TRANSPORTS):
         raise ValueError("Unrecognized MCP transport.")
