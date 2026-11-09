@@ -5,6 +5,7 @@ from uuid import UUID
 
 CAPABILITY_ID = 'burp.mcp.gateway'
 LAB_DEFINITION_ID = 'bac-orders-v1'
+from .auth_login_baseline import AUTH_BASELINE_ID
 
 
 def validate_burp_probe_options(options: dict) -> dict:
@@ -15,12 +16,14 @@ def validate_burp_probe_options(options: dict) -> dict:
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError('provider_decision_ref must reference a current approval UUID') from exc
     lab = options.get('lab_definition_id', LAB_DEFINITION_ID)
-    if lab != LAB_DEFINITION_ID:
-        raise ValueError('Only the pinned BAC fixture transport probe is supported')
-    result = {'provider_decision_ref': decision, 'lab_definition_id': lab}
     mode = options.get('mode', 'transport_probe')
-    if not isinstance(mode, str) or mode not in {'transport_probe', 'lab_sequence', 'verified_lab_sequence'}:
-        raise ValueError('Only the transport probe or pinned BAC GET sequence is supported')
+    if not isinstance(mode, str) or mode not in {
+        'transport_probe', 'lab_sequence', 'verified_lab_sequence', 'auth_baseline',
+    }:
+        raise ValueError('Only pinned gateway observation modes are supported')
+    if lab != (AUTH_BASELINE_ID if mode == 'auth_baseline' else LAB_DEFINITION_ID):
+        raise ValueError('Lab definition is not bound to the selected execution mode')
+    result = {'provider_decision_ref': decision, 'lab_definition_id': lab}
     if 'mode' in options:
         result['mode'] = mode
     if 'provider_credential_ref' in options:
