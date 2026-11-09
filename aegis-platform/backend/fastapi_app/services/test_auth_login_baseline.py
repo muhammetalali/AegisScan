@@ -64,6 +64,46 @@ class AnonymousLoginBaseline(unittest.TestCase):
         self.assertNotIn("SESSION", str(result))
         self.assertNotIn("do-not-save", str(result))
 
+    def test_rejects_untrusted_metadata_before_durable_evidence(self):
+        args = login_request_arguments(TARGET)
+        for mutation in (
+            {"transport": "sse", "Cookie": "secret_session"},
+            {"transport": "sse", "Authorization": "Bearer secret"},
+            {"transport": "sse", "server_info_sha256": "rawsecret"},
+            {"transport": "sse", "server_name": "burp-suite;token=secret"},
+            {"transport": "sse", "retry_count": True},
+            {"transport": "sse", "retry_count": 1},
+            {"transport": "sse", "server_reported_version": "1.0.0;secret"},
+            {"transport": "sse", "protocol_version": "secret_protocol"},
+            {"transport": "https://secret.invalid"},
+            {"transport": []},
+            {"transport": {"secret": "credential"}},
+            {},
+            ["not", "a", "mapping"],
+        ):
+            with self.subTest(metadata=str(mutation)[:75]):
+                response = payload_for(args["content"])
+                response["transport_metadata"] = mutation
+                with self.assertRaises(ValueError):
+                    summarize_login_result(response, request_arguments=args)
+
+    def test_realistic_burp_transport_metadata_is_bounded_and_preserved(self):
+        args = login_request_arguments(TARGET)
+        transport = {
+            "transport": "sse", "protocol_version": "2024-11-05",
+            "server_info_sha256": "a" * 64, "tools_sha256": "b" * 64,
+            "tool_schema_sha256": "c" * 64,
+            "server_name": "burp-suite",
+            "server_reported_version": "1.1.2",
+            "edition": "not_reported", "retry_count": 0,
+        }
+        response = payload_for(args["content"])
+        response["transport_metadata"] = transport
+        summary = summarize_login_result(response, request_arguments=args)
+        self.assertEqual(summary["transport_metadata"], transport)
+        self.assertFalse(summary["lab_solved"])
+        self.assertNotIn("do-not-save", str(summary))
+
     def test_plain_http_response_is_supported_but_not_a_success_verdict(self):
         args = login_request_arguments(TARGET)
         result = summarize_login_result(
