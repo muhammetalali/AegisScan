@@ -7,7 +7,7 @@ import re
 
 from django_project.system.credential_models import CredentialSecret
 from django_project.system.credential_vault import CredentialVaultDenied
-from .burp_http_probe import health_request_arguments
+from .burp_http_probe import health_request_arguments, safe_transport_metadata
 from .credential_execution import (
     authorize_credential_refs_for_execution, resolve_credential_refs_for_worker,
 )
@@ -143,7 +143,7 @@ def summarize_lab_result(payload, *, request_arguments, session, step):
         'status_code': int(first[1]), 'resource': resource,
         'response_sha256': hashlib.sha256(response.encode()).hexdigest(),
         'wire_request_sha256': hashlib.sha256(request_arguments['content'].encode()).hexdigest(),
-        'transport_metadata': payload['transport_metadata'],
+        'transport_metadata': safe_transport_metadata(payload),
         'raw_request_response_persisted': False, 'lab_solved': False,
         'verdict': 'observation_only',
     }

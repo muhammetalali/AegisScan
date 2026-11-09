@@ -8,11 +8,13 @@ from __future__ import annotations
 import hashlib
 import re
 
-from .burp_http_probe import health_request_arguments
+from .burp_http_probe import health_request_arguments, safe_transport_metadata
 
 AUTH_BASELINE_ID = "auth-login-baseline-v1"
 AUTH_BASELINE_PATH = "/login"
 _HTTP_STATUS = re.compile(r"^HTTP/(?:1\.0|1\.1|2) ([1-5][0-9]{2})(?: .*)?$")
+
+
 
 
 def login_request_arguments(target: str) -> dict:
@@ -31,7 +33,10 @@ def login_request_arguments(target: str) -> dict:
 
 def summarize_login_result(payload: dict, *, request_arguments: dict) -> dict:
     """Validate exact response binding and return redacted observation metadata."""
-    result = payload.get("mcp_result") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise ValueError("Bounded MCP response is required.")
+    transport = safe_transport_metadata(payload)
+    result = payload.get("mcp_result")
     blocks = result.get("content") if isinstance(result, dict) else None
     if (not isinstance(blocks, list) or len(blocks) != 1 or
             not isinstance(blocks[0], dict) or blocks[0].get("type") != "text" or
@@ -70,7 +75,7 @@ def summarize_login_result(payload: dict, *, request_arguments: dict) -> dict:
         "path": AUTH_BASELINE_PATH,
         "status_code": code,
         "login_form_observed": form_seen,
-        "transport_metadata": payload["transport_metadata"],
+        "transport_metadata": transport,
         "wire_request_sha256": hashlib.sha256(expected_request.encode()).hexdigest(),
         "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
         "raw_request_response_persisted": False,
