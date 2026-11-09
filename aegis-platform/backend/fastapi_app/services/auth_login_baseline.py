@@ -15,6 +15,59 @@ AUTH_BASELINE_PATH = "/login"
 _HTTP_STATUS = re.compile(r"^HTTP/(?:1\.0|1\.1|2) ([1-5][0-9]{2})(?: .*)?$")
 
 
+# These are the only transport diagnostics admitted to durable evidence. Treat
+# even the MCP adapter result as untrusted at the evidence serialization edge.
+# The "contract-*" values are synthetic offline test transports, never a trust
+# or provider approval signal.
+_TRANSPORTS = frozenset({"sse", "sse-unix", "contract-only", "contract-double"})
+_METADATA_KEYS = frozenset({
+    "transport", "protocol_version", "server_info_sha256", "server_name",
+    "server_reported_version", "tools_sha256", "tool_schema_sha256",
+    "edition", "retry_count",
+})
+_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_VERSION_RE = re.compile(r"^(?:[0-9]{1,4}\.){2}[0-9]{1,4}$")
+
+
+def _safe_transport_metadata(payload: dict) -> dict:
+    metadata = payload.get("transport_metadata")
+    if not isinstance(metadata, dict) or set(metadata) - _METADATA_KEYS:
+        raise ValueError("Unexpected or unbounded MCP transport metadata.")
+    if (not isinstance(metadata.get("transport"), str)
+            or metadata["transport"] not in _TRANSPORTS):
+        raise ValueError("Unrecognized MCP transport.")
+    safe = {"transport": metadata["transport"]}
+    for name in ("server_info_sha256", "tools_sha256", "tool_schema_sha256"):
+        if name in metadata:
+            value = metadata[name]
+            if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
+                raise ValueError("Malformed MCP transport digest.")
+            safe[name] = value
+    if "protocol_version" in metadata:
+        if metadata["protocol_version"] != "2024-11-05":
+            raise ValueError("Unexpected MCP protocol version.")
+        safe["protocol_version"] = metadata["protocol_version"]
+    if "server_name" in metadata:
+        if metadata["server_name"] not in ("burp-suite", "unrecognized"):
+            raise ValueError("Unexpected MCP server name.")
+        safe["server_name"] = metadata["server_name"]
+    if "server_reported_version" in metadata:
+        value = metadata["server_reported_version"]
+        if (not isinstance(value, str)
+                or (value != "not_reported" and not _VERSION_RE.fullmatch(value))):
+            raise ValueError("Unexpected MCP server version.")
+        safe["server_reported_version"] = value
+    if "edition" in metadata:
+        if metadata["edition"] != "not_reported":
+            raise ValueError("Unverified MCP product edition.")
+        safe["edition"] = "not_reported"
+    if "retry_count" in metadata:
+        if type(metadata["retry_count"]) is not int or metadata["retry_count"] != 0:
+            raise ValueError("MCP probe must never report an automatic retry.")
+        safe["retry_count"] = 0
+    return safe
+
+
 def login_request_arguments(target: str) -> dict:
     """Reuse the pinned web-origin validator and server-generated wire request."""
     base = health_request_arguments(target)
@@ -31,7 +84,10 @@ def login_request_arguments(target: str) -> dict:
 
 def summarize_login_result(payload: dict, *, request_arguments: dict) -> dict:
     """Validate exact response binding and return redacted observation metadata."""
-    result = payload.get("mcp_result") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise ValueError("Bounded MCP response is required.")
+    transport = _safe_transport_metadata(payload)
+    result = payload.get("mcp_result")
     blocks = result.get("content") if isinstance(result, dict) else None
     if (not isinstance(blocks, list) or len(blocks) != 1 or
             not isinstance(blocks[0], dict) or blocks[0].get("type") != "text" or
@@ -70,7 +126,7 @@ def summarize_login_result(payload: dict, *, request_arguments: dict) -> dict:
         "path": AUTH_BASELINE_PATH,
         "status_code": code,
         "login_form_observed": form_seen,
-        "transport_metadata": payload["transport_metadata"],
+        "transport_metadata": transport,
         "wire_request_sha256": hashlib.sha256(expected_request.encode()).hexdigest(),
         "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
         "raw_request_response_persisted": False,
